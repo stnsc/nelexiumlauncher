@@ -85,11 +85,12 @@ class MainActivity : Activity(), android.location.LocationListener {
     private var currentTrackKey = ""
     private var locationManager: android.location.LocationManager? = null
     private var lastLocation: android.location.Location? = null
-    private var tripStartedAt = 0L
+    private val tripClock = TripClock()
     private var tripDistanceMeters = 0.0
     private var averageSpeedTotal = 0.0
     private var averageSpeedSamples = 0
     private var topSpeed = 0
+    private var currentSpeed = 0
     private var latestAltitude = 0.0
     private var latestBearing = 0f
     private val artworkExecutor = Executors.newFixedThreadPool(2)
@@ -509,14 +510,18 @@ class MainActivity : Activity(), android.location.LocationListener {
     override fun onLocationChanged(location: android.location.Location) {
         val now = System.currentTimeMillis()
         lastGpsFixAt = now
-        val current = if (location.hasSpeed()) (location.speed * 3.6f).roundToInt().coerceAtLeast(0) else 0
+        val speedKph = if (location.hasSpeed()) (location.speed * 3.6f).coerceAtLeast(0f) else 0f
+        val current = speedKph.roundToInt()
+        currentSpeed = current
         latestAltitude = if (location.hasAltitude()) location.altitude else latestAltitude
         latestBearing = if (location.hasBearing()) location.bearing else latestBearing
 
-        if (tripStartedAt > 0L && now - tripStartedAt >= 3_600_000L) resetTrip()
-        if (tripStartedAt == 0L && current >= 5) beginTrip(now, location)
+        val wasActive = tripClock.isActive
+        val reset = tripClock.onSpeed(now, speedKph)
+        if (reset) resetTripData()
+        if (tripClock.isActive && (!wasActive || reset)) lastLocation = location
 
-        if (tripStartedAt > 0L) {
+        if (tripClock.isActive) {
             if (current >= 2) lastLocation?.let { tripDistanceMeters += it.distanceTo(location).toDouble() }
             topSpeed = maxOf(topSpeed, current)
             if (current >= 5) {
@@ -528,20 +533,22 @@ class MainActivity : Activity(), android.location.LocationListener {
         speed.update(current, if (averageSpeedSamples == 0) 0 else (averageSpeedTotal / averageSpeedSamples).roundToInt(), topSpeed)
         trip.update(
             tripDistanceMeters / 1000.0,
-            if (tripStartedAt == 0L) 0L else now - tripStartedAt,
+            tripClock.elapsed(now),
             latestAltitude,
             direction(latestBearing),
             latestBearing
         )
     }
-    private fun beginTrip(now: Long, location: android.location.Location) { tripStartedAt = now; lastLocation = location }
-    private fun resetTrip() { tripStartedAt = 0L; tripDistanceMeters = 0.0; averageSpeedTotal = 0.0; averageSpeedSamples = 0; topSpeed = 0; lastLocation = null }
+    private fun resetTripData() { tripDistanceMeters = 0.0; averageSpeedTotal = 0.0; averageSpeedSamples = 0; topSpeed = 0; lastLocation = null }
     private fun updateTripElapsed() {
         val now = System.currentTimeMillis()
-        if (tripStartedAt > 0L && now - tripStartedAt >= 3_600_000L) resetTrip()
+        if (tripClock.tick(now)) {
+            resetTripData()
+            speed.update(currentSpeed, 0, 0)
+        }
         trip.update(
             tripDistanceMeters / 1000.0,
-            if (tripStartedAt == 0L) 0L else now - tripStartedAt,
+            tripClock.elapsed(now),
             latestAltitude,
             direction(latestBearing),
             latestBearing
