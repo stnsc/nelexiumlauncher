@@ -245,7 +245,7 @@ private class ThemeColorPicker(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hsv = FloatArray(3)
     private val hueColors = intArrayOf(
-        Color.RED, Color.MAGENTA, Color.BLUE, Color.CYAN, Color.GREEN, Color.YELLOW, Color.RED
+        Color.RED, Color.YELLOW, Color.GREEN, Color.CYAN, Color.BLUE, Color.MAGENTA, Color.RED
     )
 
     init {
