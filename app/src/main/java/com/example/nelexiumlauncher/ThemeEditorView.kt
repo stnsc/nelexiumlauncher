@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -29,22 +30,29 @@ class ThemeEditorView(
     private val onPreviewChanged: (background: Int, line: Int) -> Unit,
     private val onSavePreset: (name: String, background: Int, line: Int) -> Unit,
     private val onAssignPreset: (index: Int, dark: Boolean) -> Unit,
+    private val onDeletePreset: (index: Int) -> Unit,
     private val onDashboard: () -> Unit
 ) : LinearLayout(context) {
     private var backgroundColor = initialBackground
     private var lineColor = initialLine
+    private var activeBackground = initialBackground
+    private var activeLine = initialLine
     private var editingBackground = true
-    private val backgroundButton = colorButton("COLOR 1 · BACKGROUND", backgroundColor)
-    private val lineButton = colorButton("COLOR 2 · LINES", lineColor)
+    private val backgroundButton = actionButton("COLOR 1 · BACKGROUND") { }
+    private val lineButton = actionButton("COLOR 2 · LINES") { }
     private val picker = ThemeColorPicker(context, backgroundColor) { color ->
         if (editingBackground) backgroundColor = color else lineColor = color
-        updateColorButtons()
         onPreviewChanged(backgroundColor, lineColor)
+        updateColorButtons()
     }
     private val name = EditText(context).apply {
         hint = "Preset name"
         isSingleLine = true
+        textSize = 18f
         setTextColor(Color.WHITE)
+        typeface = context.nelexiumFont()
+        setPadding(context.themeDp(12), 0, context.themeDp(12), 0)
+        backgroundTintList = null
     }
     private val presetList = LinearLayout(context).apply {
         orientation = VERTICAL
@@ -52,28 +60,36 @@ class ThemeEditorView(
     }
     private val presetScroll = ScrollView(context).apply {
         addView(presetList)
-        visibility = GONE
     }
 
     init {
         orientation = VERTICAL
-        setPadding(context.themeDp(16), context.themeDp(10), context.themeDp(16), context.themeDp(10))
+        setPadding(context.themeDp(0), context.themeDp(10), context.themeDp(0), context.themeDp(10))
 
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         header.addView(TextView(context).apply {
             text = "COLOR THEME PRESETS"
-            textSize = 18f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            textSize = 23f
+            typeface = context.nelexiumFont(true)
             setTextColor(Color.WHITE)
             layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         })
-        header.addView(actionButton("Dashboard") { onDashboard() })
-        addView(header, LayoutParams(LayoutParams.MATCH_PARENT, context.themeDp(48)))
+
+        val content = LinearLayout(context).apply { orientation = HORIZONTAL }
+        content.addView(picker, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
+            marginEnd = context.themeDp(12)
+        })
+
+        val controls = LinearLayout(context).apply { orientation = VERTICAL }
+        content.addView(controls, LayoutParams(0, LayoutParams.MATCH_PARENT, 2f))
+        addView(content, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply {
+            topMargin = context.themeDp(8)
+        })
 
         val colorButtons = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         colorButtons.addView(backgroundButton, LayoutParams(0, context.themeDp(52), 1f).apply { marginEnd = context.themeDp(6) })
         colorButtons.addView(lineButton, LayoutParams(0, context.themeDp(52), 1f).apply { marginStart = context.themeDp(6) })
-        addView(colorButtons)
+        controls.addView(colorButtons)
 
         backgroundButton.setOnClickListener {
             editingBackground = true
@@ -86,23 +102,29 @@ class ThemeEditorView(
             updateColorButtons()
         }
 
-        addView(picker, LayoutParams(LayoutParams.MATCH_PARENT, context.themeDp(230)).apply {
-            topMargin = context.themeDp(10)
-            bottomMargin = context.themeDp(8)
-        })
-        addView(name, LayoutParams(LayoutParams.MATCH_PARENT, context.themeDp(48)))
-
         val actions = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        actions.addView(name, LayoutParams(0, context.themeDp(48), 1f).apply {
+            marginEnd = context.themeDp(6)
+        })
         actions.addView(actionButton("Save preset") {
             onSavePreset(name.text.toString().trim().ifBlank { "Preset ${presets.size + 1}" }, backgroundColor, lineColor)
             name.text.clear()
             refreshPresets(presets, lightIndex, darkIndex)
-        }, LayoutParams(0, context.themeDp(48), 1f).apply { marginEnd = context.themeDp(6) })
-        actions.addView(actionButton("Presets") {
-            presetScroll.visibility = if (presetScroll.visibility == VISIBLE) GONE else VISIBLE
-        }, LayoutParams(0, context.themeDp(48), 1f).apply { marginStart = context.themeDp(6) })
-        addView(actions)
-        addView(presetScroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = context.themeDp(6) })
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, context.themeDp(48)))
+        controls.addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, context.themeDp(48)).apply {
+            topMargin = context.themeDp(8)
+        })
+        controls.addView(TextView(context).apply {
+            text = "PRESETS"
+            textSize = 20f
+            typeface = context.nelexiumFont(true)
+            setTextColor(Color.WHITE)
+        }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = context.themeDp(10)
+        })
+        controls.addView(presetScroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply {
+            topMargin = context.themeDp(4)
+        })
         updateColorButtons()
         refreshPresets(presets, lightIndex, darkIndex)
     }
@@ -115,7 +137,8 @@ class ThemeEditorView(
         presets.forEachIndexed { index, preset ->
             val row = LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(context.themeDp(4), context.themeDp(3), context.themeDp(4), context.themeDp(3))
+                setPadding(context.themeDp(8), context.themeDp(3), context.themeDp(8), context.themeDp(3))
+                background = outlinedBackground(preset.backgroundTint, preset.lineColor)
             }
             row.addView(TextView(context).apply {
                 text = preset.name + when {
@@ -124,42 +147,93 @@ class ThemeEditorView(
                     index == darkIndex -> "  · DARK"
                     else -> ""
                 }
-                textSize = 14f
-                setTextColor(preset.lineColor)
-                layoutParams = LayoutParams(0, context.themeDp(44), 1f)
+                textSize = 19f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = Gravity.CENTER_VERTICAL
+                typeface = context.nelexiumFont()
+                setTextColor(Color.WHITE)
+            }, LayoutParams(0, context.themeDp(44), 1f))
+            row.addView(actionButton("Light") { onAssignPreset(index, false) },
+                LayoutParams(context.themeDp(74), context.themeDp(42)).apply { marginStart = context.themeDp(6) })
+            row.addView(actionButton("Dark") { onAssignPreset(index, true) },
+                LayoutParams(context.themeDp(74), context.themeDp(42)).apply { marginStart = context.themeDp(6) })
+            row.addView(actionButton("Delete") { onDeletePreset(index) }.apply {
+                isEnabled = presets.size > 1
+                if (!isEnabled) alpha = 0.4f
+            }, LayoutParams(context.themeDp(82), context.themeDp(42)).apply { marginStart = context.themeDp(6) })
+            presetList.addView(row, LayoutParams(LayoutParams.MATCH_PARENT, context.themeDp(56)).apply {
+                bottomMargin = context.themeDp(6)
             })
-            row.addView(actionButton("Set to light") { onAssignPreset(index, false) })
-            row.addView(actionButton("Set to dark") { onAssignPreset(index, true) })
-            presetList.addView(row)
         }
+        setThemeBackground(activeBackground, activeLine)
+    }
+
+    fun setThemeBackground(color: Int, borderColor: Int = lineColor) {
+        activeBackground = color
+        activeLine = borderColor
+        applyThemeText(this, color)
+        styleButtons(this, color, borderColor)
+        name.setHintTextColor(if (isBrightBackground(color)) Color.DKGRAY else Color.LTGRAY)
+        name.background = outlinedBackground(color, borderColor)
+        backgroundButton.setTextColor(if (isBrightBackground(backgroundColor)) Color.BLACK else Color.WHITE)
+        lineButton.setTextColor(if (isBrightBackground(lineColor)) Color.BLACK else Color.WHITE)
+        presets.forEachIndexed { index, preset ->
+            val row = presetList.getChildAt(index) as? ViewGroup ?: return@forEachIndexed
+            row.background = outlinedBackground(preset.backgroundTint, preset.lineColor)
+            for (childIndex in 0 until row.childCount) {
+                (row.getChildAt(childIndex) as? TextView)?.setTextColor(
+                    if (isBrightBackground(preset.backgroundTint)) Color.BLACK else Color.WHITE
+                )
+                (row.getChildAt(childIndex) as? Button)?.background =
+                    outlinedBackground(preset.backgroundTint, preset.lineColor)
+            }
+        }
+        backgroundButton.background = swatch(backgroundColor)
+        lineButton.background = swatch(lineColor)
     }
 
     private fun updateColorButtons() {
-        backgroundButton.background = swatch(backgroundColor)
-        lineButton.background = swatch(lineColor)
         backgroundButton.alpha = if (editingBackground) 1f else 0.6f
         lineButton.alpha = if (editingBackground) 0.6f else 1f
+        setThemeBackground(activeBackground, activeLine)
     }
-
-    private fun colorButton(label: String, color: Int) = actionButton(label) { }
 
     private fun actionButton(label: String, action: () -> Unit) = Button(context).apply {
         text = label
-        textSize = 12f
+        textSize = 16f
         isAllCaps = false
         setTextColor(Color.WHITE)
+        typeface = context.nelexiumFont(true)
         setOnClickListener { action() }
         minWidth = 0
         minimumWidth = 0
         minHeight = 0
         minimumHeight = 0
         setPadding(context.themeDp(8), 0, context.themeDp(8), 0)
+        backgroundTintList = null
+        stateListAnimator = null
+        elevation = 0f
+        translationZ = 0f
+    }
+
+    private fun styleButtons(view: View, color: Int, borderColor: Int) {
+        when (view) {
+            is Button -> view.background = outlinedBackground(color, borderColor)
+            is ViewGroup -> for (index in 0 until view.childCount) {
+                styleButtons(view.getChildAt(index), color, borderColor)
+            }
+        }
+    }
+
+    private fun outlinedBackground(color: Int, borderColor: Int) = GradientDrawable().apply {
+        setColor(color)
+        setStroke(context.themeDp(1) + 1, borderColor)
     }
 
     private fun swatch(color: Int) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = context.themeDp(3).toFloat()
-        setStroke(context.themeDp(1), Color.argb(210, 255, 255, 255))
+        setStroke(context.themeDp(2) + 1, if (isBrightBackground(color)) Color.BLACK else Color.WHITE)
     }
 }
 
@@ -200,7 +274,7 @@ private class ThemeColorPicker(
         canvas.drawRect(0f, squareBottom + context.themeDp(8), width.toFloat(), height.toFloat(), paint)
         paint.shader = null
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = context.themeDp(2).toFloat()
+        paint.strokeWidth = context.themeDp(2) + 1f
         paint.color = Color.WHITE
         val markerX = hsv[1] * width
         val markerY = (1f - hsv[2]) * squareBottom

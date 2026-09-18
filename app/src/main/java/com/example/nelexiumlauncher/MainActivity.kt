@@ -11,7 +11,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RenderEffect
 import android.graphics.Shader
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.renderscript.Allocation
 import android.renderscript.Element
@@ -51,6 +50,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity(), android.location.LocationListener {
     private lateinit var rootFrame: FrameLayout
     private lateinit var backgroundArt: ImageView
+    private lateinit var artworkScrim: View
     private lateinit var root: LinearLayout
     private lateinit var focusHost: FrameLayout
     private lateinit var compactHost: LinearLayout
@@ -178,13 +178,12 @@ class MainActivity : Activity(), android.location.LocationListener {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(currentTheme().backgroundTint)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                setRenderEffect(RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP))
+                setRenderEffect(RenderEffect.createBlurEffect(14f, 14f, Shader.TileMode.CLAMP))
             }
         }
         rootFrame.addView(backgroundArt, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        rootFrame.addView(View(this).apply {
-            setBackgroundColor(android.graphics.Color.argb(212, 0, 0, 0))
-        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        artworkScrim = View(this)
+        rootFrame.addView(artworkScrim, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -194,6 +193,12 @@ class MainActivity : Activity(), android.location.LocationListener {
         root.addView(divider())
 
         song = SongModuleView(this)
+        song.onSeekRequested = { position ->
+            val state = currentState
+            if (state != null && (state.actions and PlaybackState.ACTION_SEEK_TO) != 0L) {
+                mediaController?.transportControls?.seekTo(position)
+            }
+        }
         speed = SpeedModuleView(this)
         trip = TripModuleView(this)
         modules = listOf(song, speed, trip)
@@ -218,6 +223,7 @@ class MainActivity : Activity(), android.location.LocationListener {
         root.addView(buildBottomBar(), LinearLayout.LayoutParams.MATCH_PARENT, dp(64))
         rootFrame.addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         setContentView(rootFrame)
+        applyTheme()
     }
 
     private fun buildTopBar(): View {
@@ -229,8 +235,8 @@ class MainActivity : Activity(), android.location.LocationListener {
         controls.addView(control("▶▶") { mediaController?.transportControls?.skipToNext() })
         bar.addView(controls, LinearLayout.LayoutParams(0, dp(70), 1f))
         val clock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
-        val time = TextView(this).apply { textSize = 31f; setTextColor(android.graphics.Color.WHITE); gravity = Gravity.END; typeface = font(true) }
-        val date = TextView(this).apply { textSize = 18f; setTextColor(android.graphics.Color.LTGRAY); gravity = Gravity.END; typeface = font(true) }
+        val time = TextView(this).apply { textSize = 31f; setTextColor(android.graphics.Color.WHITE); gravity = Gravity.END; typeface = nelexiumFont(true) }
+        val date = TextView(this).apply { textSize = 18f; setTextColor(android.graphics.Color.LTGRAY); gravity = Gravity.END; typeface = nelexiumFont(true) }
         val clockUpdate = object : Runnable { override fun run() { val now = java.util.Date(); time.text = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(now); date.text = java.text.SimpleDateFormat("EEE, d MMM", Locale.getDefault()).format(now); handler.postDelayed(this, 1000) } }
         handler.post(clockUpdate)
         clock.addView(time); clock.addView(date); bar.addView(clock, LinearLayout.LayoutParams(dp(190), dp(70)))
@@ -313,6 +319,7 @@ class MainActivity : Activity(), android.location.LocationListener {
             currentTrackKey = ""
             durationMs = 0L
             song.setData("No track", "—", "")
+            song.setProgress(0L, 0L)
             applyArtwork(null)
             return
         }
@@ -328,6 +335,7 @@ class MainActivity : Activity(), android.location.LocationListener {
 
         song.setData(title, artist, album)
         durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        updateProgress()
 
         val embeddedArtwork = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
@@ -468,7 +476,7 @@ class MainActivity : Activity(), android.location.LocationListener {
         val outputAllocation = Allocation.createFromBitmap(renderScript, output)
         val blur = ScriptIntrinsicBlur.create(renderScript, Element.U8_4(renderScript))
         try {
-            blur.setRadius(24f)
+            blur.setRadius(12f)
             blur.setInput(inputAllocation)
             blur.forEach(outputAllocation)
             outputAllocation.copyTo(output)
@@ -483,10 +491,15 @@ class MainActivity : Activity(), android.location.LocationListener {
 
     private fun updatePlayback(state: PlaybackState?) { currentState = state; val playing = state?.state == PlaybackState.STATE_PLAYING; song.setPlaying(playing); playPauseButton.text = if (playing) "Ⅱ" else "▶"; updateProgress() }
     private fun updateProgress() {
-        val state = currentState ?: return
+        val state = currentState
+        if (state == null) {
+            song.setProgress(0L, durationMs)
+            return
+        }
         var position = state.position.coerceAtLeast(0L)
         if (state.state == PlaybackState.STATE_PLAYING && state.lastPositionUpdateTime > 0) position += ((SystemClock.elapsedRealtime() - state.lastPositionUpdateTime) * state.playbackSpeed).toLong()
-        song.setProgress(position.coerceAtMost(durationMs), durationMs)
+        song.setProgress(position.coerceAtMost(durationMs), durationMs,
+            (state.actions and PlaybackState.ACTION_SEEK_TO) != 0L)
     }
 
     private fun startLocationUpdates() {
@@ -539,18 +552,18 @@ class MainActivity : Activity(), android.location.LocationListener {
     private fun updateConnectionIndicators() {
         val bluetoothColor = if (mediaConnected) android.graphics.Color.rgb(95, 220, 150) else android.graphics.Color.rgb(220, 100, 100)
         bluetoothStatus.text = "BT"
-        bluetoothStatus.setTextColor(bluetoothColor)
+        bluetoothStatus.setTextColor(if (isBrightBackground(currentTheme().backgroundTint)) android.graphics.Color.BLACK else bluetoothColor)
         bluetoothStatus.compoundDrawableTintList = ColorStateList.valueOf(bluetoothColor)
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager; val caps = cm.getNetworkCapabilities(cm.activeNetwork); val wifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
         val wifiColor = if (wifi) android.graphics.Color.rgb(95, 220, 150) else android.graphics.Color.rgb(220, 100, 100)
         wifiStatus.text = "Wi-Fi"
-        wifiStatus.setTextColor(wifiColor)
+        wifiStatus.setTextColor(if (isBrightBackground(currentTheme().backgroundTint)) android.graphics.Color.BLACK else wifiColor)
         wifiStatus.compoundDrawableTintList = ColorStateList.valueOf(wifiColor)
         val gpsEnabled = try { locationManager?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true } catch (_: Exception) { false }
         val gpsReady = gpsEnabled && System.currentTimeMillis() - lastGpsFixAt < 7_000L
         val gpsColor = if (gpsReady) android.graphics.Color.rgb(95, 220, 150) else android.graphics.Color.rgb(220, 100, 100)
         gpsStatus.text = "GPS"
-        gpsStatus.setTextColor(gpsColor)
+        gpsStatus.setTextColor(if (isBrightBackground(currentTheme().backgroundTint)) android.graphics.Color.BLACK else gpsColor)
         gpsStatus.compoundDrawableTintList = ColorStateList.valueOf(gpsColor)
     }
     private fun currentTheme(): ThemePreset {
@@ -569,8 +582,11 @@ class MainActivity : Activity(), android.location.LocationListener {
     private fun applyTheme() {
         rootFrame.setBackgroundColor(currentTheme().backgroundTint)
         if (::backgroundArt.isInitialized) backgroundArt.setBackgroundColor(currentTheme().backgroundTint)
+        artworkScrim.setBackgroundColor(if (isBrightBackground(currentTheme().backgroundTint))
+            android.graphics.Color.argb(212, 255, 255, 255) else android.graphics.Color.argb(212, 0, 0, 0))
         nightBorders = null
         updateNightStyling()
+        updateConnectionIndicators()
     }
 
     private fun toggleThemeEditor() {
@@ -604,10 +620,27 @@ class MainActivity : Activity(), android.location.LocationListener {
                 applyTheme()
                 themeEditor?.refreshPresets(themePresets, lightPresetIndex, darkPresetIndex)
             },
+            onDeletePreset = { index ->
+                if (themePresets.size > 1 && index in themePresets.indices) {
+                    themePresets.removeAt(index)
+                    fun shifted(selection: Int) = when {
+                        selection > index -> selection - 1
+                        selection == index -> selection.coerceAtMost(themePresets.lastIndex)
+                        else -> selection
+                    }
+                    lightPresetIndex = shifted(lightPresetIndex)
+                    darkPresetIndex = shifted(darkPresetIndex)
+                    previewTheme = null
+                    persistThemes()
+                    applyTheme()
+                    themeEditor?.refreshPresets(themePresets, lightPresetIndex, darkPresetIndex)
+                }
+            },
             onDashboard = { closeThemeEditor() }
         )
         dashboardHost.removeAllViews()
         dashboardHost.addView(themeEditor!!, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        themeEditor?.setThemeBackground(selected.backgroundTint, selected.lineColor)
         themeButton.text = "▣  Dashboard"
     }
 
@@ -628,16 +661,18 @@ class MainActivity : Activity(), android.location.LocationListener {
     }
 
     private fun control(label: String, action: () -> Unit) = button(label, action).apply { textSize = 22f; layoutParams = LinearLayout.LayoutParams(dp(118), dp(66)).apply { marginEnd = dp(10) } }
-    private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; textSize = 15f; typeface = font(true); isAllCaps = false; setTextColor(android.graphics.Color.WHITE); setOnClickListener { action() }; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(dp(16), 0, dp(16), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginStart = dp(10) }; borderedControls.add(this) }
-    private fun statusText(label: String, icon: Int) = TextView(this).apply { text = label; textSize = 14f; gravity = Gravity.CENTER; typeface = font(true); setTextColor(android.graphics.Color.LTGRAY); setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(8); setPadding(dp(14), 0, dp(14), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginEnd = dp(10) }; borderedControls.add(this) }
-    private fun divider() = View(this).apply { setBackgroundColor(android.graphics.Color.rgb(72, 72, 77)); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)); dividerViews.add(this) }
-    private fun controlBackground(night: Boolean) = GradientDrawable().apply { setColor(currentTheme().backgroundTint); cornerRadius = dp(3).toFloat(); setStroke(dp(1), currentTheme().lineColor) }
+    private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; textSize = 15f; typeface = nelexiumFont(true); isAllCaps = false; setTextColor(android.graphics.Color.WHITE); setOnClickListener { action() }; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(dp(16), 0, dp(16), 0); background = controlBackground(false); stateListAnimator = null; elevation = 0f; translationZ = 0f; layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginStart = dp(10) }; borderedControls.add(this) }
+    private fun statusText(label: String, icon: Int) = TextView(this).apply { text = label; textSize = 14f; gravity = Gravity.CENTER; typeface = nelexiumFont(true); setTextColor(android.graphics.Color.LTGRAY); setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(8); setPadding(dp(14), 0, dp(14), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginEnd = dp(10) }; borderedControls.add(this) }
+    private fun divider() = View(this).apply { setBackgroundColor(android.graphics.Color.rgb(72, 72, 77)); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1) + 1); dividerViews.add(this) }
+    private fun controlBackground(night: Boolean) = GradientDrawable().apply { setColor(currentTheme().backgroundTint); setStroke(dp(1) + 1, currentTheme().lineColor) }
     private fun updateNightStyling() {
         val night = isNightTime()
         if (nightBorders == night) return
         nightBorders = night
         val theme = currentTheme()
         val lineColor = theme.lineColor
+        applyThemeText(root, theme.backgroundTint)
+        themeEditor?.setThemeBackground(theme.backgroundTint, theme.lineColor)
         dividerViews.forEach { it.setBackgroundColor(lineColor) }
         borderedControls.forEach { it.background = controlBackground(night) }
         song.setNightMode(night, theme)
@@ -645,7 +680,6 @@ class MainActivity : Activity(), android.location.LocationListener {
         trip.setNightMode(night, theme)
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()
-    private fun font(bold: Boolean): Typeface { val resource = resources.getIdentifier(if (bold) "space_grotesk_bold" else "space_grotesk_regular", "font", packageName); return try { if (resource != 0 && android.os.Build.VERSION.SDK_INT >= 26) resources.getFont(resource) else Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL) } catch (_: Exception) { Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL) } }
     private fun openMaps() { try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0"))) } catch (_: Exception) { } }
     private fun showAppDrawer() { val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }; val apps = packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != packageName }.sortedBy { it.loadLabel(packageManager).toString() }; android.app.AlertDialog.Builder(this).setTitle("Apps").setItems(apps.map { it.loadLabel(packageManager) }.toTypedArray()) { _, which -> startActivity(packageManager.getLaunchIntentForPackage(apps[which].activityInfo.packageName)) }.setNegativeButton("Close", null).show() }
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit

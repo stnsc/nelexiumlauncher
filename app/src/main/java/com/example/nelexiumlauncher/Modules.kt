@@ -4,11 +4,13 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ClipDrawable
+import android.graphics.drawable.LayerDrawable
 import android.text.TextUtils
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
@@ -23,20 +25,6 @@ import kotlin.math.roundToInt
 private val Context.density get() = resources.displayMetrics.density
 private fun Context.dp(value: Int) = (value * density).roundToInt()
 
-private fun Context.nelexiumFont(bold: Boolean = false): Typeface {
-    val resource = resources.getIdentifier(
-        if (bold) "space_grotesk_bold" else "space_grotesk_regular",
-        "font",
-        packageName
-    )
-    return try {
-        if (resource != 0 && android.os.Build.VERSION.SDK_INT >= 26) resources.getFont(resource)
-        else Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
-    } catch (_: Exception) {
-        Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
-    }
-}
-
 private fun Context.moduleText(
     size: Float,
     color: Int = Color.WHITE,
@@ -44,6 +32,7 @@ private fun Context.moduleText(
     marquee: Boolean = false
 ) = TextView(this).apply {
     textSize = size
+    includeFontPadding = false
     setTextColor(color)
     typeface = nelexiumFont(bold)
     maxLines = 1
@@ -60,30 +49,33 @@ private fun moduleBorderColor(night: Boolean, palette: ThemePreset? = null) =
 
 private fun Context.panelBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
     setColor(palette?.backgroundTint ?: Color.argb(165, 13, 13, 15))
-    cornerRadius = dp(3).toFloat()
-    setStroke(dp(1), moduleBorderColor(night, palette))
+    setStroke(dp(1) + 1, moduleBorderColor(night, palette))
 }
 
 private fun Context.elementBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
     setColor(palette?.backgroundTint ?: Color.argb(115, 9, 9, 11))
-    cornerRadius = dp(3).toFloat()
-    setStroke(dp(1), moduleBorderColor(night, palette))
+    setStroke(dp(1) + 1, moduleBorderColor(night, palette))
 }
 
 class SongModuleView(context: Context) : LinearLayout(context) {
-    private val moduleLabel = context.moduleText(13f, Color.rgb(180, 185, 195), true)
+    private val moduleLabel = context.moduleText(16f, Color.rgb(180, 185, 195), true)
     private val artwork = ImageView(context)
-    private val title = context.moduleText(31f, Color.WHITE, true, true)
-    private val artist = context.moduleText(21f, Color.rgb(216, 218, 223), marquee = true)
-    private val album = context.moduleText(17f, Color.rgb(170, 176, 187), marquee = true)
-    private val playback = context.moduleText(13f, Color.rgb(174, 180, 192), true)
-    private val elapsed = context.moduleText(18f, Color.WHITE, true)
-    private val duration = context.moduleText(18f, Color.WHITE, true)
+    private val title = context.moduleText(42f, Color.WHITE, true, true)
+    private val artist = context.moduleText(29f, Color.rgb(216, 218, 223), marquee = true)
+    private val album = context.moduleText(23f, Color.rgb(170, 176, 187), marquee = true)
+    private val playback = context.moduleText(17f, Color.rgb(174, 180, 192), true)
+    private val elapsed = context.moduleText(24f, Color.WHITE, true)
+    private val duration = context.moduleText(24f, Color.WHITE, true)
     private val progress = SeekBar(context)
     private val songRow = LinearLayout(context)
     private val info = LinearLayout(context)
     private val progressRow = LinearLayout(context)
     private var hasArtwork = false
+    private var durationMs = 0L
+    private var userSeeking = false
+    private var seekHoldUntil = 0L
+    private var requestedPosition = 0L
+    var onSeekRequested: ((Long) -> Unit)? = null
 
     init {
         orientation = VERTICAL
@@ -96,7 +88,6 @@ class SongModuleView(context: Context) : LinearLayout(context) {
         info.orientation = VERTICAL
         info.gravity = Gravity.CENTER_VERTICAL
         moduleLabel.text = "NOW PLAYING"
-        moduleLabel.letterSpacing = 0.1f
         info.addView(moduleLabel)
         info.addView(playback)
         info.addView(spacer(context, 12))
@@ -111,18 +102,40 @@ class SongModuleView(context: Context) : LinearLayout(context) {
         })
         songRow.addView(info, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
 
-        progressRow.gravity = Gravity.CENTER_VERTICAL
         progress.max = 1000
         progress.isEnabled = false
         progress.splitTrack = false
+        progress.contentDescription = "Song position"
+        progress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onStartTrackingTouch(seekBar: SeekBar) {
+                userSeeking = true
+            }
+
+            override fun onProgressChanged(seekBar: SeekBar, value: Int, fromUser: Boolean) {
+                if (fromUser && durationMs > 0L) {
+                    elapsed.text = formatMediaTime((durationMs.toDouble() * value / seekBar.max).toLong())
+                }
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                userSeeking = false
+                if (durationMs > 0L && seekBar.isEnabled) {
+                    requestedPosition = (durationMs.toDouble() * seekBar.progress / seekBar.max).toLong()
+                    seekHoldUntil = SystemClock.elapsedRealtime() + 1500L
+                    onSeekRequested?.invoke(requestedPosition)
+                }
+            }
+        })
+
+        progressRow.gravity = Gravity.CENTER_VERTICAL
         elapsed.gravity = Gravity.CENTER
         duration.gravity = Gravity.CENTER
-        progressRow.addView(elapsed, LayoutParams(context.dp(72), context.dp(42)))
-        progressRow.addView(progress, LayoutParams(0, context.dp(42), 1f))
-        progressRow.addView(duration, LayoutParams(context.dp(72), context.dp(42)))
+        progressRow.addView(elapsed, LayoutParams(context.dp(82), context.dp(46)))
+        progressRow.addView(progress, LayoutParams(0, context.dp(46), 1f))
+        progressRow.addView(duration, LayoutParams(context.dp(82), context.dp(46)))
 
         addView(songRow, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        addView(progressRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(progressRow, LayoutParams(LayoutParams.MATCH_PARENT, context.dp(46)))
         setData("No track", "—", "")
         setState("CONNECTING TO BLUETOOTH…")
         setProgress(0, 0)
@@ -130,6 +143,7 @@ class SongModuleView(context: Context) : LinearLayout(context) {
     }
 
     fun setData(trackTitle: String, trackArtist: String, trackAlbum: String) {
+        seekHoldUntil = 0L
         title.text = trackTitle.ifBlank { "No track" }
         artist.text = trackArtist.ifBlank { "—" }
         album.text = trackAlbum
@@ -149,9 +163,15 @@ class SongModuleView(context: Context) : LinearLayout(context) {
         if (playback.visibility == VISIBLE) artwork.visibility = if (hasArtwork) VISIBLE else GONE
     }
 
-    fun setProgress(position: Long, total: Long) {
-        elapsed.text = formatMediaTime(position)
-        duration.text = formatMediaTime(total)
+    fun setProgress(position: Long, total: Long, canSeek: Boolean = false) {
+        durationMs = total.coerceAtLeast(0L)
+        duration.text = if (durationMs > 0L) formatMediaTime(durationMs) else "--:--"
+        progress.isEnabled = canSeek && durationMs > 0L
+        if (userSeeking) return
+        if (SystemClock.elapsedRealtime() < seekHoldUntil &&
+            abs(position - requestedPosition) > 2000L) return
+        seekHoldUntil = 0L
+        elapsed.text = formatMediaTime(position.coerceAtLeast(0L))
         progress.progress = if (total > 0L) {
             ((position.coerceIn(0L, total) * 1000L) / total).toInt()
         } else 0
@@ -164,8 +184,8 @@ class SongModuleView(context: Context) : LinearLayout(context) {
         playback.visibility = if (compact) GONE else VISIBLE
         album.visibility = if (compact) GONE else VISIBLE
         progressRow.visibility = if (compact) GONE else VISIBLE
-        title.textSize = if (compact) 18f else 31f
-        artist.textSize = if (compact) 15f else 21f
+        title.textSize = if (compact) 24f else 42f
+        artist.textSize = if (compact) 20f else 29f
         info.gravity = if (compact) Gravity.CENTER else Gravity.CENTER_VERTICAL
         moduleLabel.gravity = if (compact) Gravity.CENTER else Gravity.START
         title.gravity = if (compact) Gravity.CENTER else Gravity.START
@@ -180,16 +200,42 @@ class SongModuleView(context: Context) : LinearLayout(context) {
 
     fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
         background = context.panelBackground(night, palette)
+        applyThemeText(this, palette?.backgroundTint ?: Color.rgb(13, 13, 15))
+        val backgroundColor = palette?.backgroundTint ?: Color.rgb(13, 13, 15)
+        val foreground = if (isBrightBackground(backgroundColor)) Color.BLACK else Color.WHITE
+        val track = Color.argb(80, Color.red(foreground), Color.green(foreground), Color.blue(foreground))
+        progress.progressDrawable = LayerDrawable(arrayOf(
+            GradientDrawable().apply { setColor(track) },
+            ClipDrawable(GradientDrawable().apply { setColor(foreground) }, Gravity.START, ClipDrawable.HORIZONTAL)
+        )).apply {
+            setId(0, android.R.id.background)
+            setId(1, android.R.id.progress)
+            setLayerHeight(0, context.dp(7))
+            setLayerHeight(1, context.dp(7))
+            setLayerGravity(0, Gravity.CENTER_VERTICAL)
+            setLayerGravity(1, Gravity.CENTER_VERTICAL)
+        }
+        progress.thumb = GradientDrawable().apply {
+            setColor(foreground)
+            setStroke(context.dp(1) + 1, palette?.lineColor ?: foreground)
+            setSize(context.dp(14), context.dp(22))
+        }
+        progress.thumbTintList = null
     }
 }
 
 class SpeedModuleView(context: Context) : LinearLayout(context) {
-    private val label = context.moduleText(14f, Color.rgb(180, 185, 195), true)
-    private val currentSpeed = context.moduleText(76f, Color.WHITE, true)
-    private val unit = context.moduleText(17f, Color.rgb(180, 185, 195))
-    private val gauge = SpeedometerView(context)
-    private val details = context.moduleText(16f, Color.rgb(216, 218, 223), true)
-    private val speedRow = LinearLayout(context)
+    private val label = context.moduleText(18f, Color.rgb(180, 185, 195), true)
+    private val currentSpeed = context.moduleText(92f, Color.WHITE, true)
+    private val unit = context.moduleText(23f, Color.rgb(180, 185, 195))
+    private val averageValue = context.moduleText(28f, Color.WHITE, true)
+    private val topValue = context.moduleText(28f, Color.WHITE, true)
+    private val averageBlock = statBlock("AVERAGE", averageValue)
+    private val topBlock = statBlock("TOP", topValue)
+    private val statsRow = LinearLayout(context)
+    private val gaugeArea = FrameLayout(context)
+    private val speedReadout = LinearLayout(context)
+    private val speedBar = HorizontalSpeedBarView(context)
     private val speedHandler = Handler(Looper.getMainLooper())
     private var displayedSpeed = 0
     private var targetSpeed = 0
@@ -203,8 +249,7 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
 
             displayedSpeed += if (targetSpeed > displayedSpeed) 1 else -1
             currentSpeed.text = displayedSpeed.toString()
-            gauge.value = displayedSpeed
-            gauge.invalidate()
+            speedBar.value = displayedSpeed
 
             val remaining = abs(targetSpeed - displayedSpeed)
             val delay = if (remaining == 0) 0L else (240L / remaining).coerceIn(4L, 20L)
@@ -214,28 +259,64 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
 
     init {
         orientation = VERTICAL
-        gravity = Gravity.CENTER
         background = context.panelBackground()
         label.text = "GPS SPEED"
-        label.letterSpacing = 0.12f
+        label.gravity = Gravity.CENTER
         currentSpeed.text = "0"
         unit.text = "km/h"
-        speedRow.orientation = HORIZONTAL
-        speedRow.gravity = Gravity.CENTER_VERTICAL
-        speedRow.addView(currentSpeed, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        speedRow.addView(details, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        addView(label)
-        addView(speedRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        addView(unit)
-        addView(gauge, LayoutParams(LayoutParams.MATCH_PARENT, context.dp(105)))
+
+        statsRow.orientation = HORIZONTAL
+        statsRow.addView(averageBlock, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
+            marginEnd = context.dp(4)
+        })
+        statsRow.addView(topBlock, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
+            marginStart = context.dp(4)
+        })
+
+        speedReadout.gravity = Gravity.CENTER
+        speedReadout.addView(currentSpeed)
+        speedReadout.addView(unit)
+        gaugeArea.addView(speedBar, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, context.dp(130), Gravity.BOTTOM
+        ).apply { bottomMargin = context.dp(12) })
+        gaugeArea.addView(speedReadout, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP
+        ))
+
+        addView(label, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(statsRow, LayoutParams(LayoutParams.MATCH_PARENT, context.dp(64)).apply {
+            topMargin = context.dp(4)
+            bottomMargin = context.dp(4)
+        })
+        addView(gaugeArea, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
         update(0, 0, 0)
         setCompact(true)
     }
 
+    private fun statBlock(title: String, value: TextView) = LinearLayout(context).apply {
+        orientation = VERTICAL
+        gravity = Gravity.CENTER
+        background = context.elementBackground()
+        setPadding(0, context.dp(5), 0, context.dp(5))
+        addView(context.moduleText(17f, Color.rgb(180, 185, 195), true).apply {
+            text = title
+            gravity = Gravity.CENTER
+        })
+        value.gravity = Gravity.CENTER
+        addView(value)
+    }
+
     fun update(current: Int, average: Int, top: Int) {
         targetSpeed = current.coerceAtLeast(0)
-        details.text = "AVERAGE  $average km/h       TOP  $top km/h"
-        if (displayedSpeed == targetSpeed) currentSpeed.text = displayedSpeed.toString()
+        averageValue.text = "$average km/h"
+        topValue.text = "$top km/h"
+        val peak = maxOf(targetSpeed, top)
+        speedBar.maxSpeed = maxOf(180, ((peak + 59) / 60) * 60)
+        speedBar.topSpeed = peak
+        if (displayedSpeed == targetSpeed) {
+            currentSpeed.text = displayedSpeed.toString()
+            speedBar.value = displayedSpeed
+        }
         if (!speedAnimationRunning && displayedSpeed != targetSpeed) {
             speedAnimationRunning = true
             speedHandler.post(speedStep)
@@ -244,32 +325,39 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
 
     fun setCompact(compact: Boolean) {
         alpha = 1f
-        label.visibility = VISIBLE
-        unit.visibility = VISIBLE
-        gauge.visibility = if (compact) GONE else VISIBLE
-        details.visibility = if (compact) GONE else VISIBLE
-        currentSpeed.textSize = if (compact) 52f else 76f
-        gravity = if (compact) Gravity.CENTER else Gravity.CENTER_VERTICAL
-        label.gravity = if (compact) Gravity.CENTER else Gravity.START
-        currentSpeed.gravity = if (compact) Gravity.CENTER else Gravity.START
-        unit.gravity = if (compact) Gravity.CENTER else Gravity.START
-        details.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        val focusedTextPadding = if (compact) 0 else context.dp(28)
-        label.setPadding(focusedTextPadding, 0, 0, 0)
-        currentSpeed.setPadding(focusedTextPadding, 0, 0, 0)
-        unit.setPadding(focusedTextPadding, 0, 0, 0)
-        details.setPadding(0, 0, focusedTextPadding, 0)
-        listOf(label, unit).forEach {
-            it.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        statsRow.visibility = if (compact) GONE else VISIBLE
+        speedBar.visibility = if (compact) GONE else VISIBLE
+        label.visibility = if (compact) VISIBLE else GONE
+        gravity = if (compact) Gravity.CENTER else Gravity.TOP
+        label.textSize = 18f
+        currentSpeed.textSize = if (compact) 68f else 108f
+        unit.textSize = 23f
+        speedReadout.orientation = if (compact) VERTICAL else HORIZONTAL
+        speedReadout.gravity = if (compact) Gravity.CENTER else Gravity.START or Gravity.CENTER_VERTICAL
+        speedReadout.setPadding(0, 0, 0, 0)
+        gaugeArea.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT,
+            if (compact) LayoutParams.WRAP_CONTENT else 0, if (compact) 0f else 1f)
+        speedReadout.layoutParams = FrameLayout.LayoutParams(
+            if (compact) FrameLayout.LayoutParams.MATCH_PARENT else FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            if (compact) Gravity.CENTER else Gravity.START or Gravity.CENTER_VERTICAL
+        ).apply { if (!compact) marginStart = context.dp(16) }
+        currentSpeed.gravity = Gravity.CENTER
+        unit.gravity = Gravity.CENTER
+        currentSpeed.layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+        unit.layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            marginStart = if (compact) 0 else context.dp(12)
         }
-        setPadding(context.dp(14), context.dp(12), context.dp(14), context.dp(12))
+        setPadding(context.dp(14), context.dp(if (compact) 12 else 6),
+            context.dp(14), context.dp(if (compact) 12 else 6))
     }
 
     fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
         background = context.panelBackground(night, palette)
-        gauge.nightMode = night
-        gauge.theme = palette
-        gauge.invalidate()
+        applyThemeText(this, palette?.backgroundTint ?: Color.rgb(13, 13, 15))
+        averageBlock.background = context.elementBackground(night, palette)
+        topBlock.background = context.elementBackground(night, palette)
+        speedBar.theme = palette
     }
 
     override fun onDetachedFromWindow() {
@@ -281,6 +369,7 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         currentSpeed.text = displayedSpeed.toString()
+        speedBar.value = displayedSpeed
         if (!speedAnimationRunning && displayedSpeed != targetSpeed) {
             speedAnimationRunning = true
             speedHandler.post(speedStep)
@@ -288,58 +377,81 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
     }
 }
 
-private class SpeedometerView(context: Context) : View(context) {
-    var value = 0
-    var nightMode = false
+private class HorizontalSpeedBarView(context: Context) : View(context) {
+    var value: Int = 0
+        set(newValue) {
+            field = newValue
+            invalidate()
+        }
     var theme: ThemePreset? = null
+        set(newTheme) {
+            field = newTheme
+            invalidate()
+        }
+    var maxSpeed: Int = 180
+        set(newMaxSpeed) {
+            field = newMaxSpeed
+            invalidate()
+        }
+    var topSpeed: Int = 0
+        set(newTopSpeed) {
+            field = newTopSpeed
+            invalidate()
+        }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val left = context.dp(28).toFloat()
-        val right = width - context.dp(28).toFloat()
-        val trackY = height * 0.42f
-        val progressX = left + (right - left) * value.coerceIn(0, 180) / 180f
-
-        paint.style = Paint.Style.STROKE
-        paint.strokeCap = Paint.Cap.SQUARE
-        paint.strokeWidth = context.dp(8).toFloat()
-        paint.color = theme?.lineColor?.let { Color.argb(150, Color.red(it), Color.green(it), Color.blue(it)) }
-            ?: if (nightMode) Color.rgb(105, 20, 26) else Color.rgb(55, 56, 62)
-        canvas.drawLine(left, trackY, right, trackY, paint)
-        paint.color = if (value >= 140) Color.rgb(235, 70, 70) else Color.rgb(238, 238, 242)
-        canvas.drawLine(left, trackY, progressX, trackY, paint)
-
-        paint.strokeWidth = context.dp(2).toFloat()
-        paint.textAlign = Paint.Align.CENTER
-        paint.typeface = context.nelexiumFont(true)
-        paint.textSize = context.dp(12).toFloat()
-        for (tick in 0..6) {
-            val x = left + (right - left) * tick / 6f
-            paint.color = if (tick * 30 <= value) Color.WHITE else theme?.lineColor
-                ?: if (nightMode) Color.rgb(180, 42, 50) else Color.rgb(110, 112, 120)
-            canvas.drawLine(x, trackY - context.dp(9), x, trackY + context.dp(9), paint)
-            if (tick % 2 == 0) {
-                canvas.drawText((tick * 30).toString(), x, height - context.dp(8).toFloat(), paint)
-            }
-        }
-
-        paint.style = Paint.Style.FILL
-        paint.color = if (value >= 140) Color.rgb(235, 70, 70) else Color.WHITE
-        val marker = android.graphics.Path().apply {
-            moveTo(progressX, trackY - context.dp(14))
-            lineTo(progressX - context.dp(7), trackY - context.dp(25))
-            lineTo(progressX + context.dp(7), trackY - context.dp(25))
+        val left = context.dp(24).toFloat()
+        val right = width - left
+        if (right <= left) return
+        val baselineY = height - context.dp(30).toFloat()
+        val maximumHeight = context.dp(94).toFloat()
+        val foreground = if (isBrightBackground(theme?.backgroundTint ?: Color.BLACK)) Color.BLACK else Color.WHITE
+        val inactive = Color.argb(90, Color.red(foreground), Color.green(foreground), Color.blue(foreground))
+        val fraction = value.coerceIn(0, maxSpeed) / maxSpeed.toFloat()
+        val filledUntil = left + (right - left) * fraction
+        val ramp = android.graphics.Path().apply {
+            moveTo(left, baselineY)
+            lineTo(right, baselineY - maximumHeight)
+            lineTo(right, baselineY)
             close()
         }
-        canvas.drawPath(marker, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = inactive
+        canvas.drawPath(ramp, paint)
+        canvas.save()
+        canvas.clipRect(left, 0f, filledUntil, baselineY + 1f)
+        paint.color = foreground
+        canvas.drawPath(ramp, paint)
+        canvas.restore()
+
+        if (topSpeed > 0) {
+            val topFraction = (topSpeed / maxSpeed.toFloat()).coerceIn(0f, 1f)
+            val markerX = left + (right - left) * topFraction
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = context.dp(2) + 1f
+            paint.color = theme?.lineColor ?: foreground
+            canvas.drawLine(markerX, baselineY,
+                markerX, baselineY - maximumHeight * topFraction - context.dp(5), paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = foreground
+        paint.typeface = context.nelexiumFont(true)
+        paint.textSize = context.dp(20).toFloat()
+        paint.textAlign = Paint.Align.CENTER
+        val baseline = height - context.dp(3).toFloat()
+        for (tick in 0..3) {
+            val x = left + (right - left) * tick / 3f
+            canvas.drawText((tick * maxSpeed / 3).toString(), x, baseline, paint)
+        }
     }
 }
 
 class TripModuleView(context: Context) : FrameLayout(context) {
     private val focusedContent = LinearLayout(context)
     private val compactContent = LinearLayout(context)
-    private val compactDistance = context.moduleText(27f, Color.WHITE, true)
+    private val compactDistance = context.moduleText(36f, Color.WHITE, true)
     private val focusedDistance = statBlock("DISTANCE", "0.0 km")
     private val focusedTime = statBlock("TIME", "00:00:00")
     private val focusedAltitude = statBlock("ALTITUDE", "0 m")
@@ -362,9 +474,8 @@ class TripModuleView(context: Context) : FrameLayout(context) {
 
         compactContent.orientation = LinearLayout.VERTICAL
         compactContent.gravity = Gravity.CENTER
-        compactContent.addView(context.moduleText(13f, Color.rgb(180, 185, 195), true).apply {
+        compactContent.addView(context.moduleText(17f, Color.rgb(180, 185, 195), true).apply {
             text = "TRIP"
-            letterSpacing = 0.12f
             gravity = Gravity.CENTER
         })
         compactDistance.gravity = Gravity.CENTER
@@ -379,12 +490,11 @@ class TripModuleView(context: Context) : FrameLayout(context) {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         background = context.elementBackground()
-        addView(context.moduleText(13f, Color.rgb(180, 185, 195), true).apply {
+        addView(context.moduleText(18f, Color.rgb(180, 185, 195), true).apply {
             text = label
-            letterSpacing = 0.1f
             gravity = Gravity.CENTER
         })
-        addView(context.moduleText(31f, Color.WHITE, true).apply {
+        addView(context.moduleText(41f, Color.WHITE, true).apply {
             text = initial
             gravity = Gravity.CENTER
         })
@@ -427,6 +537,7 @@ class TripModuleView(context: Context) : FrameLayout(context) {
 
     fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
         background = context.panelBackground(night, palette)
+        applyThemeText(this, palette?.backgroundTint ?: Color.rgb(13, 13, 15))
         focusedDistance.background = context.elementBackground(night, palette)
         focusedTime.background = context.elementBackground(night, palette)
         focusedAltitude.background = context.elementBackground(night, palette)
@@ -451,15 +562,15 @@ private class CompassView(context: Context) : View(context) {
         val radius = minOf(width, height) * 0.37f
 
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = context.dp(1).toFloat()
+        paint.strokeWidth = context.dp(1) + 1f
         paint.color = theme?.lineColor ?: if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(92, 94, 102)
         canvas.drawCircle(cx, cy, radius, paint)
 
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = context.nelexiumFont(true)
-        paint.textSize = context.dp(11).toFloat()
-        paint.color = Color.rgb(185, 188, 197)
+        paint.textSize = context.dp(14).toFloat()
+        paint.color = if (isBrightBackground(theme?.backgroundTint ?: Color.BLACK)) Color.BLACK else Color.rgb(185, 188, 197)
         canvas.drawText("N", cx, cy - radius + context.dp(12), paint)
         canvas.drawText("E", cx + radius - context.dp(9), cy + context.dp(4), paint)
         canvas.drawText("S", cx, cy + radius - context.dp(3), paint)
@@ -467,25 +578,25 @@ private class CompassView(context: Context) : View(context) {
 
         canvas.save()
         canvas.rotate(bearing, cx, cy)
-        paint.color = Color.WHITE
+        paint.color = if (isBrightBackground(theme?.backgroundTint ?: Color.BLACK)) Color.BLACK else Color.WHITE
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = context.dp(2).toFloat()
+        paint.strokeWidth = context.dp(2) + 1f
         canvas.drawLine(cx, cy + radius * 0.28f, cx, cy - radius * 0.58f, paint)
         canvas.drawLine(cx, cy - radius * 0.58f, cx - context.dp(4), cy - radius * 0.45f, paint)
         canvas.drawLine(cx, cy - radius * 0.58f, cx + context.dp(4), cy - radius * 0.45f, paint)
         canvas.restore()
 
-        paint.textSize = context.dp(18).toFloat()
+        paint.textSize = context.dp(24).toFloat()
         val baseline = cy - (paint.ascent() + paint.descent()) / 2f
         paint.style = Paint.Style.STROKE
         paint.strokeJoin = Paint.Join.ROUND
-        paint.strokeWidth = context.dp(3).toFloat()
+        paint.strokeWidth = context.dp(3) + 1f
         paint.color = theme?.lineColor ?: if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(18, 18, 21)
         canvas.drawText(heading, cx, baseline, paint)
 
         paint.style = Paint.Style.FILL
-        paint.color = Color.WHITE
+        paint.color = if (isBrightBackground(theme?.backgroundTint ?: Color.BLACK)) Color.BLACK else Color.WHITE
         canvas.drawText(heading, cx, baseline, paint)
     }
 }
