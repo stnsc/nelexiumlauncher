@@ -55,19 +55,19 @@ private fun Context.moduleText(
     }
 }
 
-private fun moduleBorderColor(night: Boolean) =
-    if (night) Color.rgb(190, 28, 38) else Color.argb(190, 70, 70, 76)
+private fun moduleBorderColor(night: Boolean, palette: ThemePreset? = null) =
+    palette?.lineColor ?: if (night) Color.rgb(190, 28, 38) else Color.argb(190, 70, 70, 76)
 
-private fun Context.panelBackground(night: Boolean = false) = GradientDrawable().apply {
-    setColor(Color.argb(165, 13, 13, 15))
+private fun Context.panelBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
+    setColor(palette?.backgroundTint ?: Color.argb(165, 13, 13, 15))
     cornerRadius = dp(3).toFloat()
-    setStroke(dp(1), moduleBorderColor(night))
+    setStroke(dp(1), moduleBorderColor(night, palette))
 }
 
-private fun Context.elementBackground(night: Boolean = false) = GradientDrawable().apply {
-    setColor(Color.argb(115, 9, 9, 11))
+private fun Context.elementBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
+    setColor(palette?.backgroundTint ?: Color.argb(115, 9, 9, 11))
     cornerRadius = dp(3).toFloat()
-    setStroke(dp(1), moduleBorderColor(night))
+    setStroke(dp(1), moduleBorderColor(night, palette))
 }
 
 class SongModuleView(context: Context) : LinearLayout(context) {
@@ -178,8 +178,8 @@ class SongModuleView(context: Context) : LinearLayout(context) {
         )
     }
 
-    fun setNightMode(night: Boolean) {
-        background = context.panelBackground(night)
+    fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
+        background = context.panelBackground(night, palette)
     }
 }
 
@@ -265,9 +265,10 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
         setPadding(context.dp(14), context.dp(12), context.dp(14), context.dp(12))
     }
 
-    fun setNightMode(night: Boolean) {
-        background = context.panelBackground(night)
+    fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
+        background = context.panelBackground(night, palette)
         gauge.nightMode = night
+        gauge.theme = palette
         gauge.invalidate()
     }
 
@@ -290,6 +291,7 @@ class SpeedModuleView(context: Context) : LinearLayout(context) {
 private class SpeedometerView(context: Context) : View(context) {
     var value = 0
     var nightMode = false
+    var theme: ThemePreset? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     override fun onDraw(canvas: Canvas) {
@@ -302,7 +304,8 @@ private class SpeedometerView(context: Context) : View(context) {
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.SQUARE
         paint.strokeWidth = context.dp(8).toFloat()
-        paint.color = if (nightMode) Color.rgb(105, 20, 26) else Color.rgb(55, 56, 62)
+        paint.color = theme?.lineColor?.let { Color.argb(150, Color.red(it), Color.green(it), Color.blue(it)) }
+            ?: if (nightMode) Color.rgb(105, 20, 26) else Color.rgb(55, 56, 62)
         canvas.drawLine(left, trackY, right, trackY, paint)
         paint.color = if (value >= 140) Color.rgb(235, 70, 70) else Color.rgb(238, 238, 242)
         canvas.drawLine(left, trackY, progressX, trackY, paint)
@@ -313,7 +316,8 @@ private class SpeedometerView(context: Context) : View(context) {
         paint.textSize = context.dp(12).toFloat()
         for (tick in 0..6) {
             val x = left + (right - left) * tick / 6f
-            paint.color = if (tick * 30 <= value) Color.WHITE else if (nightMode) Color.rgb(180, 42, 50) else Color.rgb(110, 112, 120)
+            paint.color = if (tick * 30 <= value) Color.WHITE else theme?.lineColor
+                ?: if (nightMode) Color.rgb(180, 42, 50) else Color.rgb(110, 112, 120)
             canvas.drawLine(x, trackY - context.dp(9), x, trackY + context.dp(9), paint)
             if (tick % 2 == 0) {
                 canvas.drawText((tick * 30).toString(), x, height - context.dp(8).toFloat(), paint)
@@ -421,13 +425,14 @@ class TripModuleView(context: Context) : FrameLayout(context) {
         compactContent.visibility = if (compact) VISIBLE else GONE
     }
 
-    fun setNightMode(night: Boolean) {
-        background = context.panelBackground(night)
-        focusedDistance.background = context.elementBackground(night)
-        focusedTime.background = context.elementBackground(night)
-        focusedAltitude.background = context.elementBackground(night)
-        compass.background = context.elementBackground(night)
+    fun setNightMode(night: Boolean, palette: ThemePreset? = null) {
+        background = context.panelBackground(night, palette)
+        focusedDistance.background = context.elementBackground(night, palette)
+        focusedTime.background = context.elementBackground(night, palette)
+        focusedAltitude.background = context.elementBackground(night, palette)
+        compass.background = context.elementBackground(night, palette)
         compass.nightMode = night
+        compass.theme = palette
         compass.invalidate()
     }
 }
@@ -436,6 +441,7 @@ private class CompassView(context: Context) : View(context) {
     var heading = "N"
     var bearing = 0f
     var nightMode = false
+    var theme: ThemePreset? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     override fun onDraw(canvas: Canvas) {
@@ -446,7 +452,7 @@ private class CompassView(context: Context) : View(context) {
 
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = context.dp(1).toFloat()
-        paint.color = if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(92, 94, 102)
+        paint.color = theme?.lineColor ?: if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(92, 94, 102)
         canvas.drawCircle(cx, cy, radius, paint)
 
         paint.style = Paint.Style.FILL
@@ -475,7 +481,7 @@ private class CompassView(context: Context) : View(context) {
         paint.style = Paint.Style.STROKE
         paint.strokeJoin = Paint.Join.ROUND
         paint.strokeWidth = context.dp(3).toFloat()
-        paint.color = if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(18, 18, 21)
+        paint.color = theme?.lineColor ?: if (nightMode) Color.rgb(190, 28, 38) else Color.rgb(18, 18, 21)
         canvas.drawText(heading, cx, baseline, paint)
 
         paint.style = Paint.Style.FILL

@@ -59,10 +59,20 @@ class MainActivity : Activity(), android.location.LocationListener {
     private lateinit var trip: TripModuleView
     private lateinit var bluetoothStatus: TextView
     private lateinit var wifiStatus: TextView
+    private lateinit var gpsStatus: TextView
+    private lateinit var themeButton: Button
+    private lateinit var dashboardHost: FrameLayout
     private lateinit var playPauseButton: Button
     private val dividerViews = mutableListOf<View>()
     private val borderedControls = mutableListOf<View>()
     private var nightBorders: Boolean? = null
+    private val themePrefs by lazy { getSharedPreferences("theme_presets", Context.MODE_PRIVATE) }
+    private var themePresets = ThemePresets.decode(null)
+    private var lightPresetIndex = 0
+    private var darkPresetIndex = 1
+    private var previewTheme: ThemePreset? = null
+    private var themeEditor: ThemeEditorView? = null
+    private var lastGpsFixAt = 0L
 
     private var focusedIndex = 0
     private val compactOrder = mutableListOf(1, 2)
@@ -117,6 +127,11 @@ class MainActivity : Activity(), android.location.LocationListener {
         window.statusBarColor = android.graphics.Color.BLACK
         window.navigationBarColor = android.graphics.Color.BLACK
         hideSystemBars()
+        themePresets = ThemePresets.decode(themePrefs.getString("presets", null))
+        if (themePresets.isEmpty()) themePresets = ThemePresets.defaults.toMutableList()
+        val presetMaxIndex = themePresets.lastIndex
+        lightPresetIndex = themePrefs.getInt("light_index", 0).coerceIn(0, presetMaxIndex)
+        darkPresetIndex = themePrefs.getInt("dark_index", minOf(1, presetMaxIndex)).coerceIn(0, presetMaxIndex)
         buildUi()
         hideSystemBars()
         connectMedia()
@@ -157,11 +172,11 @@ class MainActivity : Activity(), android.location.LocationListener {
 
     private fun buildUi() {
         rootFrame = FrameLayout(this).apply {
-            setBackgroundColor(android.graphics.Color.rgb(8, 8, 9))
+            setBackgroundColor(currentTheme().backgroundTint)
         }
         backgroundArt = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(android.graphics.Color.rgb(8, 8, 9))
+            setBackgroundColor(currentTheme().backgroundTint)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 setRenderEffect(RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP))
             }
@@ -188,8 +203,15 @@ class MainActivity : Activity(), android.location.LocationListener {
         compactHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
         moduleRow.addView(focusHost, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3.1f))
         moduleRow.addView(compactHost, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.25f))
-        root.addView(moduleRow, LinearLayout.LayoutParams.MATCH_PARENT, 0)
-        (moduleRow.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        dashboardHost = FrameLayout(this)
+        dashboardHost.addView(moduleRow, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        root.addView(dashboardHost, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0
+        ).apply { weight = 1f })
         showFocusedModule(0, false)
 
         root.addView(divider())
@@ -219,7 +241,11 @@ class MainActivity : Activity(), android.location.LocationListener {
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         bluetoothStatus = statusText("BT --", R.drawable.ic_bluetooth_status)
         wifiStatus = statusText("Wi-Fi --", R.drawable.ic_wifi_status)
-        bar.addView(bluetoothStatus); bar.addView(wifiStatus)
+        gpsStatus = statusText("GPS --", R.drawable.ic_gps_status)
+        bar.addView(bluetoothStatus); bar.addView(wifiStatus); bar.addView(gpsStatus)
+        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        themeButton = button("◉  Themes") { toggleThemeEditor() }
+        bar.addView(themeButton)
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         bar.addView(button("⌖  Maps") { openMaps() }); bar.addView(button("▦  Apps") { showAppDrawer() }); bar.addView(button("⚙  Settings") { startActivity(Intent(Settings.ACTION_SETTINGS)) })
         return bar
@@ -469,6 +495,7 @@ class MainActivity : Activity(), android.location.LocationListener {
     }
     override fun onLocationChanged(location: android.location.Location) {
         val now = System.currentTimeMillis()
+        lastGpsFixAt = now
         val current = if (location.hasSpeed()) (location.speed * 3.6f).roundToInt().coerceAtLeast(0) else 0
         latestAltitude = if (location.hasAltitude()) location.altitude else latestAltitude
         latestBearing = if (location.hasBearing()) location.bearing else latestBearing
@@ -478,7 +505,6 @@ class MainActivity : Activity(), android.location.LocationListener {
 
         if (tripStartedAt > 0L) {
             if (current >= 2) lastLocation?.let { tripDistanceMeters += it.distanceTo(location).toDouble() }
-            lastLocation = location
             topSpeed = maxOf(topSpeed, current)
             if (current >= 5) {
                 averageSpeedTotal += current
@@ -520,23 +546,103 @@ class MainActivity : Activity(), android.location.LocationListener {
         wifiStatus.text = "Wi-Fi"
         wifiStatus.setTextColor(wifiColor)
         wifiStatus.compoundDrawableTintList = ColorStateList.valueOf(wifiColor)
+        val gpsEnabled = try { locationManager?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true } catch (_: Exception) { false }
+        val gpsReady = gpsEnabled && System.currentTimeMillis() - lastGpsFixAt < 7_000L
+        val gpsColor = if (gpsReady) android.graphics.Color.rgb(95, 220, 150) else android.graphics.Color.rgb(220, 100, 100)
+        gpsStatus.text = "GPS"
+        gpsStatus.setTextColor(gpsColor)
+        gpsStatus.compoundDrawableTintList = ColorStateList.valueOf(gpsColor)
     }
+    private fun currentTheme(): ThemePreset {
+        if (themePresets.isEmpty()) return ThemePresets.defaults.first()
+        val index = (if (isNightTime()) darkPresetIndex else lightPresetIndex).coerceIn(0, themePresets.lastIndex)
+        return previewTheme ?: themePresets[index]
+    }
+    private fun isNightTime(): Boolean { val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY); return hour >= 20 || hour < 6 }
+    private fun persistThemes() {
+        themePrefs.edit()
+            .putString("presets", ThemePresets.encode(themePresets))
+            .putInt("light_index", lightPresetIndex)
+            .putInt("dark_index", darkPresetIndex)
+            .apply()
+    }
+    private fun applyTheme() {
+        rootFrame.setBackgroundColor(currentTheme().backgroundTint)
+        if (::backgroundArt.isInitialized) backgroundArt.setBackgroundColor(currentTheme().backgroundTint)
+        nightBorders = null
+        updateNightStyling()
+    }
+
+    private fun toggleThemeEditor() {
+        if (themeEditor != null) {
+            closeThemeEditor()
+            return
+        }
+        previewTheme = null
+        val selected = currentTheme()
+        themeEditor = ThemeEditorView(
+            this,
+            selected.backgroundTint,
+            selected.lineColor,
+            themePresets,
+            lightPresetIndex,
+            darkPresetIndex,
+            onPreviewChanged = { background, line ->
+                previewTheme = ThemePreset("Preview", background, line)
+                applyTheme()
+            },
+            onSavePreset = { name, background, line ->
+                themePresets.add(ThemePreset(name, background, line))
+                persistThemes()
+                themeEditor?.refreshPresets(themePresets, lightPresetIndex, darkPresetIndex)
+                applyTheme()
+            },
+            onAssignPreset = { index, dark ->
+                if (dark) darkPresetIndex = index else lightPresetIndex = index
+                previewTheme = null
+                persistThemes()
+                applyTheme()
+                themeEditor?.refreshPresets(themePresets, lightPresetIndex, darkPresetIndex)
+            },
+            onDashboard = { closeThemeEditor() }
+        )
+        dashboardHost.removeAllViews()
+        dashboardHost.addView(themeEditor!!, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        themeButton.text = "▣  Dashboard"
+    }
+
+    private fun closeThemeEditor() {
+        themeEditor = null
+        previewTheme = null
+        dashboardHost.removeAllViews()
+        // Recreate the module host so the existing focus/compact references stay intact.
+        (focusHost.parent as? android.view.ViewGroup)?.removeView(focusHost)
+        (compactHost.parent as? android.view.ViewGroup)?.removeView(compactHost)
+        val moduleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, dp(12)) }
+        moduleRow.addView(focusHost, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3.1f))
+        moduleRow.addView(compactHost, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.25f))
+        dashboardHost.addView(moduleRow, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        showFocusedModule(focusedIndex, false)
+        themeButton.text = "◉  Themes"
+        applyTheme()
+    }
+
     private fun control(label: String, action: () -> Unit) = button(label, action).apply { textSize = 22f; layoutParams = LinearLayout.LayoutParams(dp(118), dp(66)).apply { marginEnd = dp(10) } }
     private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; textSize = 15f; typeface = font(true); isAllCaps = false; setTextColor(android.graphics.Color.WHITE); setOnClickListener { action() }; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(dp(16), 0, dp(16), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginStart = dp(10) }; borderedControls.add(this) }
     private fun statusText(label: String, icon: Int) = TextView(this).apply { text = label; textSize = 14f; gravity = Gravity.CENTER; typeface = font(true); setTextColor(android.graphics.Color.LTGRAY); setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(8); setPadding(dp(14), 0, dp(14), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginEnd = dp(10) }; borderedControls.add(this) }
     private fun divider() = View(this).apply { setBackgroundColor(android.graphics.Color.rgb(72, 72, 77)); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)); dividerViews.add(this) }
-    private fun controlBackground(night: Boolean) = GradientDrawable().apply { setColor(android.graphics.Color.argb(175, 16, 16, 18)); cornerRadius = dp(3).toFloat(); setStroke(dp(1), if (night) android.graphics.Color.rgb(190, 28, 38) else android.graphics.Color.argb(205, 82, 82, 90)) }
+    private fun controlBackground(night: Boolean) = GradientDrawable().apply { setColor(currentTheme().backgroundTint); cornerRadius = dp(3).toFloat(); setStroke(dp(1), currentTheme().lineColor) }
     private fun updateNightStyling() {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val night = hour >= 20 || hour < 6
+        val night = isNightTime()
         if (nightBorders == night) return
         nightBorders = night
-        val lineColor = if (night) android.graphics.Color.rgb(190, 28, 38) else android.graphics.Color.rgb(72, 72, 77)
+        val theme = currentTheme()
+        val lineColor = theme.lineColor
         dividerViews.forEach { it.setBackgroundColor(lineColor) }
         borderedControls.forEach { it.background = controlBackground(night) }
-        song.setNightMode(night)
-        speed.setNightMode(night)
-        trip.setNightMode(night)
+        song.setNightMode(night, theme)
+        speed.setNightMode(night, theme)
+        trip.setNightMode(night, theme)
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()
     private fun font(bold: Boolean): Typeface { val resource = resources.getIdentifier(if (bold) "space_grotesk_bold" else "space_grotesk_regular", "font", packageName); return try { if (resource != 0 && android.os.Build.VERSION.SDK_INT >= 26) resources.getFont(resource) else Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL) } catch (_: Exception) { Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL) } }
