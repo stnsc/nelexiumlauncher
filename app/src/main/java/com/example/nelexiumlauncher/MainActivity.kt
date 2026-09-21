@@ -61,6 +61,9 @@ class MainActivity : Activity(), android.location.LocationListener {
     private lateinit var wifiStatus: TextView
     private lateinit var gpsStatus: TextView
     private lateinit var themeButton: Button
+    private lateinit var updateButton: Button
+    private var updateDialog: android.app.AlertDialog? = null
+    private val updateManager by lazy { UpdateManager.get(this) }
     private lateinit var dashboardHost: FrameLayout
     private lateinit var playPauseButton: Button
     private val dividerViews = mutableListOf<View>()
@@ -102,6 +105,8 @@ class MainActivity : Activity(), android.location.LocationListener {
             updateConnectionIndicators()
             updateTripElapsed()
             updateNightStyling()
+            if (hasWindowFocus()) updateManager.tick()
+            updateButton.text = if (updateManager.ready != null) "↓ Update ready" else "⚙ Settings"
             handler.postDelayed(this, 1000)
         }
     }
@@ -254,7 +259,16 @@ class MainActivity : Activity(), android.location.LocationListener {
         themeButton = button("◉  Themes") { toggleThemeEditor() }
         bar.addView(themeButton)
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        bar.addView(button("⌖  Maps") { openMaps() }); bar.addView(button("▦  Apps") { showAppDrawer() }); bar.addView(button("⚙  Settings") { startActivity(Intent(Settings.ACTION_SETTINGS)) })
+        bar.addView(button("⌖  Maps") { openMaps() }); bar.addView(button("▦  Apps") { showAppDrawer() })
+        updateButton = button("⚙ Settings") {
+            android.app.AlertDialog.Builder(this).setTitle("Settings")
+                .setItems(arrayOf("App updates", "Android settings")) { _, which ->
+                    if (which == 0) {
+                        if (updateDialog?.isShowing != true) updateDialog = UpdateDialog.show(this)
+                    } else startActivity(Intent(Settings.ACTION_SETTINGS))
+                }.setNegativeButton("Close", null).show()
+        }
+        bar.addView(updateButton)
         return bar
     }
 
@@ -692,5 +706,5 @@ class MainActivity : Activity(), android.location.LocationListener {
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
     override fun onProviderEnabled(provider: String) = Unit
     override fun onProviderDisabled(provider: String) { if (provider == android.location.LocationManager.GPS_PROVIDER) speed.update(0, 0, topSpeed) }
-    override fun onDestroy() { handler.removeCallbacksAndMessages(null); artworkExecutor.shutdownNow(); mediaController?.unregisterCallback(mediaCallback); try { mediaBrowser?.disconnect() } catch (_: Exception) { }; locationManager?.removeUpdates(this); super.onDestroy() }
+    override fun onDestroy() { updateDialog?.dismiss(); handler.removeCallbacksAndMessages(null); artworkExecutor.shutdownNow(); mediaController?.unregisterCallback(mediaCallback); try { mediaBrowser?.disconnect() } catch (_: Exception) { }; locationManager?.removeUpdates(this); super.onDestroy() }
 }
