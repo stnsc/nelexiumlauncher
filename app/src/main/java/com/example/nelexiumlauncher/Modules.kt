@@ -577,7 +577,10 @@ private class CompassView(context: Context) : View(context) {
         canvas.drawText("W", cx - radius + context.dp(9), cy + context.dp(4), paint)
 
         canvas.save()
-        canvas.rotate(bearing, cx, cy)
+        // Location.bearing is clockwise from north. The compass graphic is
+        // rendered in the opposite screen-space direction, so invert it here
+        // to keep the needle aligned with the displayed heading.
+        canvas.rotate(-bearing, cx, cy)
         paint.color = if (isBrightBackground(theme?.backgroundTint ?: Color.BLACK)) Color.BLACK else Color.WHITE
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND

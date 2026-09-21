@@ -522,7 +522,7 @@ class MainActivity : Activity(), android.location.LocationListener {
         if (tripClock.isActive && (!wasActive || reset)) lastLocation = location
 
         if (tripClock.isActive) {
-            if (current >= 2) lastLocation?.let { tripDistanceMeters += it.distanceTo(location).toDouble() }
+            if (current >= 2) lastLocation?.let { tripDistanceMeters = it.distanceTo(location).toDouble() }
             topSpeed = maxOf(topSpeed, current)
             if (current >= 5) {
                 averageSpeedTotal += current
