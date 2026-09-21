@@ -29,19 +29,20 @@ internal class UpdateManager private constructor(private val context: Context) {
         private set
     var ready: Release? = null
         private set
-    var status = "Enter an update feed URL to get started."
+    var status = "Ready to check for updates."
         private set
-    val feedUrl: String get() = prefs.getString("feed", "") ?: ""
-    val automatic: Boolean get() = prefs.getBoolean("automatic", false)
+    val feedUrl: String get() = prefs.getString("feed", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_FEED_URL
+    val automatic: Boolean get() = prefs.getBoolean("automatic", true)
     val installed: PackageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
 
     fun configure(url: String, auto: Boolean) {
         check(!busy) { "Wait for the current update check to finish." }
-        if (url.isNotBlank()) UpdatePolicy.httpsUrl(url)
-        if (url != feedUrl) ready = null
-        prefs.edit().putString("feed", url).putBoolean("automatic", auto).apply()
+        val resolvedUrl = url.trim().ifBlank { DEFAULT_FEED_URL }
+        UpdatePolicy.httpsUrl(resolvedUrl)
+        if (resolvedUrl != feedUrl) ready = null
+        prefs.edit().putString("feed", resolvedUrl).putBoolean("automatic", auto).apply()
         nextCheck = 0L
-        status = if (url.isBlank()) "Updates are not configured." else "Update settings saved."
+        status = "Update settings saved."
     }
 
     fun tick() {
@@ -196,7 +197,7 @@ internal class UpdateManager private constructor(private val context: Context) {
             }
         }
         check(digest.digest().joinToString("") { "%02x".format(it) } == release.hash) { "APK checksum mismatch" }
-        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val flags = signingCertificateFlags()
         val candidate = context.packageManager.getPackageArchiveInfo(file.path, flags) ?: error("Invalid APK")
         val current = context.packageManager.getPackageInfo(context.packageName, flags)
         check(candidate.packageName == context.packageName) { "APK belongs to a different app" }
@@ -209,10 +210,20 @@ internal class UpdateManager private constructor(private val context: Context) {
             return signatures?.map { it.toCharsString() }?.toSet() ?: emptySet()
         }
         val installedSigners = signers(current)
-        check(installedSigners.isNotEmpty() && installedSigners == signers(candidate)) { "APK signing key does not match this installation" }
+        val candidateSigners = signers(candidate)
+        check(installedSigners.isNotEmpty()) { "Cannot read this installation's signing certificate" }
+        check(candidateSigners.isNotEmpty()) { "Cannot read the downloaded APK's signing certificate" }
+        check(installedSigners == candidateSigners) { "APK signing key does not match this installation" }
     }
 
     companion object {
+        const val DEFAULT_FEED_URL = "https://nl-updates.stnsc.net/latest.json"
+        @Suppress("DEPRECATION")
+        internal fun signingCertificateFlags(): Int = if (Build.VERSION.SDK_INT >= 28) {
+            // Some Android versions only collect archive certificates when the legacy flag
+            // is also present. Still compare current apkContentsSigners, not signing history.
+            PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
+        } else PackageManager.GET_SIGNATURES
         @Volatile private var instance: UpdateManager? = null
         fun get(context: Context): UpdateManager = instance ?: synchronized(this) {
             instance ?: UpdateManager(context.applicationContext).also { instance = it }

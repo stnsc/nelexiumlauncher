@@ -31,7 +31,7 @@ internal object UpdateDialog {
         val url = EditText(activity).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
-            hint = "https://your-server/updates/latest.json"
+            hint = UpdateManager.DEFAULT_FEED_URL
             setText(manager.feedUrl)
         }
         layout.addView(url)
@@ -56,6 +56,7 @@ internal object UpdateDialog {
             .setNegativeButton("Close", null).create()
         fun saveSettings(): Boolean = try {
             manager.configure(url.text.toString().trim(), automatic.isChecked)
+            url.setText(manager.feedUrl)
             url.error = null
             true
         } catch (e: Exception) { url.error = e.message; false }

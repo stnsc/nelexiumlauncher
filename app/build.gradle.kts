@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.nelexiumlauncher"
         minSdk = 23
         targetSdk = 37
-        versionCode = 5
-        versionName = "1.4-ota"
+        versionCode = 10
+        versionName = "1.10-ota"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
