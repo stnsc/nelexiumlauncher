@@ -8,58 +8,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.InputType
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import androidx.core.content.FileProvider
 
 internal object UpdateDialog {
-    fun show(activity: Activity): AlertDialog {
+    fun show(activity: Activity, dashboard: android.view.View, theme: ThemePreset): android.app.Dialog {
         val manager = UpdateManager.get(activity)
-        val padding = (20 * activity.resources.displayMetrics.density).toInt()
-        val layout = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
+        val ui = UpdateModal(activity, dashboard, theme, manager)
+        val dialog = ui.dialog
+        val status = ui.status
+        val check = ui.check
+        val install = ui.install
+        val automatic = ui.automatic
+        automatic.setOnCheckedChangeListener { _, enabled ->
+            try {
+                manager.configure(manager.feedUrl, enabled)
+            } catch (error: Exception) {
+                automatic.isChecked = manager.automatic
+                status.text = error.message
+            }
         }
-        layout.addView(TextView(activity).apply {
-            text = "Installed: ${manager.installed.versionName} (${UpdateManager.versionCode(manager.installed)})\n"
-        })
-//        val url = EditText(activity).apply {
-//            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-//            setSingleLine()
-//            hint = UpdateManager.DEFAULT_FEED_URL
-//            setText(manager.feedUrl)
-//        }
-//        layout.addView(url)
-        val automatic = CheckBox(activity).apply {
-            text = "Automatically check and download while launcher is open"
-            isChecked = manager.automatic
-        }
-        layout.addView(automatic)
-        layout.addView(TextView(activity).apply {
-            text = "Downloads use any internet connection, including a phone hotspot. Checks run every 15 minutes. Installation closes the launcher."
-        })
-        val status = TextView(activity).apply { setPadding(0, padding, 0, padding) }
-        layout.addView(status)
-        val check = Button(activity).apply { text = "Check and download now" }
-        val install = Button(activity).apply { text = "Install downloaded update" }
-        layout.addView(check)
-        layout.addView(install)
-        val dialog = AlertDialog.Builder(activity).setTitle("App updates")
-            .setView(ScrollView(activity).apply { addView(layout) })
-            .setNegativeButton("Close", null).create()
-//        fun saveSettings(): Boolean = try {
-//            manager.configure(url.text.toString().trim(), automatic.isChecked)
-//            url.setText(manager.feedUrl)
-//            url.error = null
-//            true
-//        } catch (e: Exception) { url.error = e.message; false }
-//        save.setOnClickListener { saveSettings() }
-//        check.setOnClickListener { if (saveSettings()) manager.checkNow() }
+        check.setOnClickListener { manager.checkNow() }
         install.setOnClickListener {
             AlertDialog.Builder(activity).setTitle("Install update?")
                 .setMessage("Park before continuing. Android will close the launcher to install the update. You can reopen it using the Home button.")
@@ -90,9 +58,13 @@ internal object UpdateDialog {
         val refresh = object : Runnable {
             override fun run() {
                 status.text = manager.status
+                automatic.isEnabled = !manager.busy
                 check.isEnabled = !manager.busy
+                check.alpha = if (check.isEnabled) 1f else 0.45f
                 install.isEnabled = !manager.busy && manager.ready != null
-                handler.postDelayed(this, 500)
+                install.alpha = if (install.isEnabled) 1f else 0.45f
+                ui.refreshDiagnostics()
+                handler.postDelayed(this, 1000)
             }
         }
         dialog.setOnDismissListener { handler.removeCallbacksAndMessages(null) }

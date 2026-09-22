@@ -48,12 +48,13 @@ private fun moduleBorderColor(night: Boolean, palette: ThemePreset? = null) =
     palette?.lineColor ?: if (night) Color.rgb(190, 28, 38) else Color.argb(190, 70, 70, 76)
 
 private fun Context.panelBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
-    setColor(palette?.backgroundTint ?: Color.argb(165, 13, 13, 15))
+    setColor(androidx.core.graphics.ColorUtils.setAlphaComponent(palette?.backgroundTint ?: Color.rgb(13, 13, 15), 64))
     setStroke(dp(1) + 1, moduleBorderColor(night, palette))
 }
 
 private fun Context.elementBackground(night: Boolean = false, palette: ThemePreset? = null) = GradientDrawable().apply {
-    setColor(palette?.backgroundTint ?: Color.argb(115, 9, 9, 11))
+    // The parent panel supplies the 25% tint; avoid stacking another opaque layer.
+    setColor(Color.TRANSPARENT)
     setStroke(dp(1) + 1, moduleBorderColor(night, palette))
 }
 

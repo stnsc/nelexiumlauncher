@@ -42,7 +42,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
@@ -62,10 +61,12 @@ class MainActivity : Activity(), android.location.LocationListener {
     private lateinit var gpsStatus: TextView
     private lateinit var themeButton: Button
     private lateinit var updateButton: Button
-    private var updateDialog: android.app.AlertDialog? = null
+    private var updateDialog: android.app.Dialog? = null
+    private var settingsModal: SettingsModal? = null
     private val updateManager by lazy { UpdateManager.get(this) }
     private lateinit var dashboardHost: FrameLayout
-    private lateinit var playPauseButton: Button
+    private lateinit var playPauseButton: PlaybackButton
+    private val playbackButtons = mutableListOf<PlaybackButton>()
     private val dividerViews = mutableListOf<View>()
     private val borderedControls = mutableListOf<View>()
     private var nightBorders: Boolean? = null
@@ -87,9 +88,8 @@ class MainActivity : Activity(), android.location.LocationListener {
     private var durationMs = 0L
     private var currentTrackKey = ""
     private var locationManager: android.location.LocationManager? = null
-    private var lastLocation: android.location.Location? = null
     private val tripClock = TripClock()
-    private var tripDistanceMeters = 0.0
+    private val tripDistance = TripDistance()
     private var averageSpeedTotal = 0.0
     private var averageSpeedSamples = 0
     private var topSpeed = 0
@@ -106,7 +106,12 @@ class MainActivity : Activity(), android.location.LocationListener {
             updateTripElapsed()
             updateNightStyling()
             if (hasWindowFocus()) updateManager.tick()
-            updateButton.text = if (updateManager.ready != null) "↓ Update ready" else "⚙ Settings"
+            val updateReady = updateManager.ready != null
+            val updateLabel = if (updateReady) "Update ready" else "Settings"
+            if (updateButton.text.toString() != updateLabel) {
+                updateButton.text = updateLabel
+                setBottomBarIcon(updateButton, if (updateReady) R.drawable.ic_tabler_download else R.drawable.ic_tabler_settings)
+            }
             handler.postDelayed(this, 1000)
         }
     }
@@ -235,10 +240,10 @@ class MainActivity : Activity(), android.location.LocationListener {
     private fun buildTopBar(): View {
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(control("◀◀") { mediaController?.transportControls?.skipToPrevious() })
-        playPauseButton = control("▶") { if (currentState?.state == PlaybackState.STATE_PLAYING) mediaController?.transportControls?.pause() else mediaController?.transportControls?.play() }
+        controls.addView(control("Previous track", R.drawable.ic_tabler_player_skip_back) { mediaController?.transportControls?.skipToPrevious() })
+        playPauseButton = control("Play", R.drawable.ic_tabler_player_play) { if (currentState?.state == PlaybackState.STATE_PLAYING) mediaController?.transportControls?.pause() else mediaController?.transportControls?.play() }
         controls.addView(playPauseButton)
-        controls.addView(control("▶▶") { mediaController?.transportControls?.skipToNext() })
+        controls.addView(control("Next track", R.drawable.ic_tabler_player_skip_forward) { mediaController?.transportControls?.skipToNext() })
         bar.addView(controls, LinearLayout.LayoutParams(0, dp(70), 1f))
         val clock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
         val time = TextView(this).apply { textSize = 31f; setTextColor(android.graphics.Color.WHITE); gravity = Gravity.END; typeface = nelexiumFont(true) }
@@ -256,17 +261,23 @@ class MainActivity : Activity(), android.location.LocationListener {
         gpsStatus = statusText("GPS --", R.drawable.ic_gps_status)
         bar.addView(bluetoothStatus); bar.addView(wifiStatus); bar.addView(gpsStatus)
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        themeButton = button("◉  Themes") { toggleThemeEditor() }
+        themeButton = bottomBarButton("Themes", R.drawable.ic_tabler_themes) { toggleThemeEditor() }
         bar.addView(themeButton)
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        bar.addView(button("⌖  Maps") { openMaps() }); bar.addView(button("▦  Apps") { showAppDrawer() })
-        updateButton = button("⚙ Settings") {
-            android.app.AlertDialog.Builder(this).setTitle("Settings")
-                .setItems(arrayOf("App updates", "Android settings")) { _, which ->
-                    if (which == 0) {
-                        if (updateDialog?.isShowing != true) updateDialog = UpdateDialog.show(this)
-                    } else startActivity(Intent(Settings.ACTION_SETTINGS))
-                }.setNegativeButton("Close", null).show()
+        bar.addView(bottomBarButton("Maps", R.drawable.ic_tabler_maps) { openMaps() })
+        bar.addView(bottomBarButton("Apps", R.drawable.ic_tabler_apps) { showAppDrawer() })
+        updateButton = bottomBarButton("Settings", R.drawable.ic_tabler_settings) {
+            if (settingsModal?.isShowing != true) {
+                settingsModal = SettingsModal(this, rootFrame, currentTheme(),
+                    onUpdates = {
+                        if (updateDialog?.isShowing != true) updateDialog = UpdateDialog.show(this, rootFrame, currentTheme())
+                    },
+                    onAndroidSettings = { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                ).apply {
+                    setOnDismissListener { settingsModal = null }
+                    show()
+                }
+            }
         }
         bar.addView(updateButton)
         return bar
@@ -361,13 +372,14 @@ class MainActivity : Activity(), android.location.LocationListener {
             return
         }
 
+        val trackDurationMs = durationMs
         applyArtwork(null)
         artworkExecutor.execute {
             val cached = loadArtworkFromCache(trackKey)
             if (cached != null) {
                 showArtworkIfCurrent(trackKey, cached)
             } else {
-                fetchArtworkOnline(artist, title, album, trackKey)
+                fetchArtworkOnline(artist, title, album, trackKey, trackDurationMs)
             }
         }
     }
@@ -398,7 +410,7 @@ class MainActivity : Activity(), android.location.LocationListener {
         }
     }
 
-    private fun artworkDirectory() = File(filesDir, "artwork").apply {
+    private fun artworkDirectory() = File(filesDir, "artwork-ytmusic-v1").apply {
         if (!exists()) mkdirs()
     }
 
@@ -429,43 +441,12 @@ class MainActivity : Activity(), android.location.LocationListener {
         artist: String,
         title: String,
         album: String,
-        trackKey: String
+        trackKey: String,
+        trackDurationMs: Long
     ) {
-        var searchConnection: HttpURLConnection? = null
         var imageConnection: HttpURLConnection? = null
         try {
-            val query = URLEncoder.encode("$artist $title", "UTF-8")
-            searchConnection = URL(
-                "https://itunes.apple.com/search?term=$query&entity=song&limit=10"
-            ).openConnection() as HttpURLConnection
-            searchConnection.connectTimeout = 7000
-            searchConnection.readTimeout = 7000
-            searchConnection.setRequestProperty("User-Agent", "NelexiumLauncher/1.0")
-            val response = searchConnection.inputStream.bufferedReader().use { it.readText() }
-            val results = org.json.JSONObject(response).optJSONArray("results") ?: return
-
-            var artworkUrl: String? = null
-            for (index in 0 until results.length()) {
-                val item = results.optJSONObject(index) ?: continue
-                val resultArtist = item.optString("artistName")
-                val resultTitle = item.optString("trackName")
-                val resultAlbum = item.optString("collectionName")
-                val artistMatches = resultArtist.contains(artist, true) || artist.contains(resultArtist, true)
-                val titleMatches = resultTitle.contains(title, true) || title.contains(resultTitle, true)
-                val albumMatches = album.isNotBlank() && (resultAlbum.contains(album, true) || album.contains(resultAlbum, true))
-                if ((artistMatches && titleMatches) || (artistMatches && albumMatches)) {
-                    artworkUrl = item.optString("artworkUrl100")
-                    break
-                }
-            }
-            if (artworkUrl.isNullOrBlank() && results.length() > 0) {
-                artworkUrl = results.optJSONObject(0)?.optString("artworkUrl100")
-            }
-            if (artworkUrl.isNullOrBlank()) return
-
-            val highResolutionUrl = artworkUrl
-                .replace("100x100bb", "600x600bb")
-                .replace("100x100", "600x600")
+            val highResolutionUrl = YouTubeMusicArtwork.find(artist, title, album, trackDurationMs) ?: return
             imageConnection = URL(highResolutionUrl).openConnection() as HttpURLConnection
             imageConnection.connectTimeout = 7000
             imageConnection.readTimeout = 7000
@@ -475,7 +456,6 @@ class MainActivity : Activity(), android.location.LocationListener {
             showArtworkIfCurrent(trackKey, bitmap)
         } catch (_: Exception) {
         } finally {
-            searchConnection?.disconnect()
             imageConnection?.disconnect()
         }
     }
@@ -504,7 +484,14 @@ class MainActivity : Activity(), android.location.LocationListener {
         return output
     }
 
-    private fun updatePlayback(state: PlaybackState?) { currentState = state; val playing = state?.state == PlaybackState.STATE_PLAYING; song.setPlaying(playing); playPauseButton.text = if (playing) "Ⅱ" else "▶"; updateProgress() }
+    private fun updatePlayback(state: PlaybackState?) {
+        currentState = state
+        val playing = state?.state == PlaybackState.STATE_PLAYING
+        song.setPlaying(playing)
+        playPauseButton.setImageResource(if (playing) R.drawable.ic_tabler_player_pause else R.drawable.ic_tabler_player_play)
+        playPauseButton.contentDescription = if (playing) "Pause" else "Play"
+        updateProgress()
+    }
     private fun updateProgress() {
         val state = currentState
         if (state == null) {
@@ -530,13 +517,11 @@ class MainActivity : Activity(), android.location.LocationListener {
         latestAltitude = if (location.hasAltitude()) location.altitude else latestAltitude
         latestBearing = if (location.hasBearing()) location.bearing else latestBearing
 
-        val wasActive = tripClock.isActive
         val reset = tripClock.onSpeed(now, speedKph)
         if (reset) resetTripData()
-        if (tripClock.isActive && (!wasActive || reset)) lastLocation = location
 
         if (tripClock.isActive) {
-            if (current >= 2) lastLocation?.let { tripDistanceMeters = it.distanceTo(location).toDouble() }
+            tripDistance.update(location, moving = current >= 2)
             topSpeed = maxOf(topSpeed, current)
             if (current >= 5) {
                 averageSpeedTotal += current
@@ -546,14 +531,14 @@ class MainActivity : Activity(), android.location.LocationListener {
 
         speed.update(current, if (averageSpeedSamples == 0) 0 else (averageSpeedTotal / averageSpeedSamples).roundToInt(), topSpeed)
         trip.update(
-            tripDistanceMeters / 1000.0,
+            tripDistance.meters / 1000.0,
             tripClock.elapsed(now),
             latestAltitude,
             direction(latestBearing),
             latestBearing
         )
     }
-    private fun resetTripData() { tripDistanceMeters = 0.0; averageSpeedTotal = 0.0; averageSpeedSamples = 0; topSpeed = 0; lastLocation = null }
+    private fun resetTripData() { tripDistance.reset(); averageSpeedTotal = 0.0; averageSpeedSamples = 0; topSpeed = 0 }
     private fun updateTripElapsed() {
         val now = System.currentTimeMillis()
         if (tripClock.tick(now)) {
@@ -561,7 +546,7 @@ class MainActivity : Activity(), android.location.LocationListener {
             speed.update(currentSpeed, 0, 0)
         }
         trip.update(
-            tripDistanceMeters / 1000.0,
+            tripDistance.meters / 1000.0,
             tripClock.elapsed(now),
             latestAltitude,
             direction(latestBearing),
@@ -604,7 +589,7 @@ class MainActivity : Activity(), android.location.LocationListener {
         rootFrame.setBackgroundColor(currentTheme().backgroundTint)
         if (::backgroundArt.isInitialized) backgroundArt.setBackgroundColor(currentTheme().backgroundTint)
         artworkScrim.setBackgroundColor(if (isBrightBackground(currentTheme().backgroundTint))
-            android.graphics.Color.argb(212, 255, 255, 255) else android.graphics.Color.argb(212, 0, 0, 0))
+            android.graphics.Color.argb(64, 255, 255, 255) else android.graphics.Color.argb(64, 0, 0, 0))
         nightBorders = null
         updateNightStyling()
         updateConnectionIndicators()
@@ -662,7 +647,8 @@ class MainActivity : Activity(), android.location.LocationListener {
         dashboardHost.removeAllViews()
         dashboardHost.addView(themeEditor!!, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         themeEditor?.setThemeBackground(selected.backgroundTint, selected.lineColor)
-        themeButton.text = "▣  Dashboard"
+        themeButton.text = "Dashboard"
+        setBottomBarIcon(themeButton, R.drawable.ic_tabler_dashboard)
     }
 
     private fun closeThemeEditor() {
@@ -677,11 +663,29 @@ class MainActivity : Activity(), android.location.LocationListener {
         moduleRow.addView(compactHost, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.25f))
         dashboardHost.addView(moduleRow, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         showFocusedModule(focusedIndex, false)
-        themeButton.text = "◉  Themes"
+        themeButton.text = "Themes"
+        setBottomBarIcon(themeButton, R.drawable.ic_tabler_themes)
         applyTheme()
     }
 
-    private fun control(label: String, action: () -> Unit) = button(label, action).apply { textSize = 22f; layoutParams = LinearLayout.LayoutParams(dp(118), dp(66)).apply { marginEnd = dp(10) } }
+    private fun setBottomBarIcon(view: TextView, icon: Int) {
+        val drawable = getDrawable(icon)?.mutate()
+        drawable?.setBounds(0, 0, dp(32), dp(32))
+        view.setCompoundDrawablesRelative(drawable, null, null, null)
+        view.compoundDrawablePadding = dp(8)
+        view.compoundDrawableTintList = view.textColors
+    }
+
+    private fun bottomBarButton(label: String, icon: Int, action: () -> Unit) =
+        button(label, action).apply { setBottomBarIcon(this, icon) }
+
+    private fun control(label: String, icon: Int, action: () -> Unit) = PlaybackButton(this).apply {
+        contentDescription = label
+        setImageResource(icon)
+        setTheme(currentTheme())
+        setOnClickListener { action() }
+        playbackButtons.add(this)
+    }
     private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; textSize = 15f; typeface = nelexiumFont(true); isAllCaps = false; setTextColor(android.graphics.Color.WHITE); setOnClickListener { action() }; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(dp(16), 0, dp(16), 0); background = controlBackground(false); stateListAnimator = null; elevation = 0f; translationZ = 0f; layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginStart = dp(10) }; borderedControls.add(this) }
     private fun statusText(label: String, icon: Int) = TextView(this).apply { text = label; textSize = 14f; gravity = Gravity.CENTER; typeface = nelexiumFont(true); setTextColor(android.graphics.Color.LTGRAY); setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(8); setPadding(dp(14), 0, dp(14), 0); background = controlBackground(false); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(50)).apply { marginEnd = dp(10) }; borderedControls.add(this) }
     private fun divider() = View(this).apply { setBackgroundColor(android.graphics.Color.rgb(72, 72, 77)); layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1) + 1); dividerViews.add(this) }
@@ -693,9 +697,13 @@ class MainActivity : Activity(), android.location.LocationListener {
         val theme = currentTheme()
         val lineColor = theme.lineColor
         applyThemeText(root, theme.backgroundTint)
+        playbackButtons.forEach { it.setTheme(theme) }
         themeEditor?.setThemeBackground(theme.backgroundTint, theme.lineColor)
         dividerViews.forEach { it.setBackgroundColor(lineColor) }
-        borderedControls.forEach { it.background = controlBackground(night) }
+        borderedControls.forEach {
+            it.background = controlBackground(night)
+            if (it is Button) it.compoundDrawableTintList = it.textColors
+        }
         song.setNightMode(night, theme)
         speed.setNightMode(night, theme)
         trip.setNightMode(night, theme)
@@ -706,5 +714,5 @@ class MainActivity : Activity(), android.location.LocationListener {
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
     override fun onProviderEnabled(provider: String) = Unit
     override fun onProviderDisabled(provider: String) { if (provider == android.location.LocationManager.GPS_PROVIDER) speed.update(0, 0, topSpeed) }
-    override fun onDestroy() { updateDialog?.dismiss(); handler.removeCallbacksAndMessages(null); artworkExecutor.shutdownNow(); mediaController?.unregisterCallback(mediaCallback); try { mediaBrowser?.disconnect() } catch (_: Exception) { }; locationManager?.removeUpdates(this); super.onDestroy() }
+    override fun onDestroy() { settingsModal?.dismiss(); updateDialog?.dismiss(); handler.removeCallbacksAndMessages(null); artworkExecutor.shutdownNow(); mediaController?.unregisterCallback(mediaCallback); try { mediaBrowser?.disconnect() } catch (_: Exception) { }; locationManager?.removeUpdates(this); super.onDestroy() }
 }
