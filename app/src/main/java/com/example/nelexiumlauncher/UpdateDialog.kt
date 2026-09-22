@@ -26,42 +26,40 @@ internal object UpdateDialog {
             setPadding(padding, padding, padding, padding)
         }
         layout.addView(TextView(activity).apply {
-            text = "Installed: ${manager.installed.versionName} (${UpdateManager.versionCode(manager.installed)})\n\nUpdate feed URL"
+            text = "Installed: ${manager.installed.versionName} (${UpdateManager.versionCode(manager.installed)})\n"
         })
-        val url = EditText(activity).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine()
-            hint = UpdateManager.DEFAULT_FEED_URL
-            setText(manager.feedUrl)
-        }
-        layout.addView(url)
+//        val url = EditText(activity).apply {
+//            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+//            setSingleLine()
+//            hint = UpdateManager.DEFAULT_FEED_URL
+//            setText(manager.feedUrl)
+//        }
+//        layout.addView(url)
         val automatic = CheckBox(activity).apply {
             text = "Automatically check and download while launcher is open"
             isChecked = manager.automatic
         }
         layout.addView(automatic)
         layout.addView(TextView(activity).apply {
-            text = "Downloads use any internet connection, including a phone hotspot. Checks run every 15 minutes. Install only when parked; installation closes the launcher."
+            text = "Downloads use any internet connection, including a phone hotspot. Checks run every 15 minutes. Installation closes the launcher."
         })
         val status = TextView(activity).apply { setPadding(0, padding, 0, padding) }
         layout.addView(status)
-        val save = Button(activity).apply { text = "Save settings" }
         val check = Button(activity).apply { text = "Check and download now" }
         val install = Button(activity).apply { text = "Install downloaded update" }
-        layout.addView(save)
         layout.addView(check)
         layout.addView(install)
         val dialog = AlertDialog.Builder(activity).setTitle("App updates")
             .setView(ScrollView(activity).apply { addView(layout) })
             .setNegativeButton("Close", null).create()
-        fun saveSettings(): Boolean = try {
-            manager.configure(url.text.toString().trim(), automatic.isChecked)
-            url.setText(manager.feedUrl)
-            url.error = null
-            true
-        } catch (e: Exception) { url.error = e.message; false }
-        save.setOnClickListener { saveSettings() }
-        check.setOnClickListener { if (saveSettings()) manager.checkNow() }
+//        fun saveSettings(): Boolean = try {
+//            manager.configure(url.text.toString().trim(), automatic.isChecked)
+//            url.setText(manager.feedUrl)
+//            url.error = null
+//            true
+//        } catch (e: Exception) { url.error = e.message; false }
+//        save.setOnClickListener { saveSettings() }
+//        check.setOnClickListener { if (saveSettings()) manager.checkNow() }
         install.setOnClickListener {
             AlertDialog.Builder(activity).setTitle("Install update?")
                 .setMessage("Park before continuing. Android will close the launcher to install the update. You can reopen it using the Home button.")
@@ -92,7 +90,6 @@ internal object UpdateDialog {
         val refresh = object : Runnable {
             override fun run() {
                 status.text = manager.status
-                save.isEnabled = !manager.busy
                 check.isEnabled = !manager.busy
                 install.isEnabled = !manager.busy && manager.ready != null
                 handler.postDelayed(this, 500)
