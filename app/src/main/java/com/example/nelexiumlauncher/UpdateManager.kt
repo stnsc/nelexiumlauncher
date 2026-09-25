@@ -201,7 +201,12 @@ internal class UpdateManager private constructor(private val context: Context) {
         val candidate = context.packageManager.getPackageArchiveInfo(file.path, flags) ?: error("Invalid APK")
         val current = context.packageManager.getPackageInfo(context.packageName, flags)
         check(candidate.packageName == context.packageName) { "APK belongs to a different app" }
-        check(versionCode(candidate) == release.code && release.code > versionCode(current)) { "APK version mismatch" }
+        check(versionCode(candidate) == release.code) {
+            "APK version mismatch: feed expects code ${release.code}, downloaded APK has code ${versionCode(candidate)}. The publisher must rebuild the APK and regenerate the feed"
+        }
+        check(versionCode(candidate) > versionCode(current)) {
+            "APK is not newer: installed code ${versionCode(current)}, downloaded code ${versionCode(candidate)}"
+        }
         if (Build.VERSION.SDK_INT >= 24) {
             check((candidate.applicationInfo?.minSdkVersion ?: Int.MAX_VALUE) <= Build.VERSION.SDK_INT) { "APK requires a newer Android version" }
         }

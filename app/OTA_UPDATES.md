@@ -45,8 +45,11 @@ to HTTP are rejected. APKs are limited to 256 MB, feeds to 64 KB.
    at the location represented by `BASE_URL`. Use `BASE_URL/latest.json` in the app.
 
 Despite its filename, the batch file only prepares files; it does not build, sign,
-or upload. It does not inspect APK version metadata or signing certificates, so
-the settings must match your build. Keep published APK URLs immutable by increasing
+or upload. It uses Android SDK `aapt` to verify the APK's package, version code,
+version name, and minimum SDK against the settings before creating output. A stale
+APK is rejected with a rebuild message. It finds the SDK through `ANDROID_HOME`,
+`ANDROID_SDK_ROOT`, or `local.properties`. Signing certificates are not checked by
+this script. Keep published APK URLs immutable by increasing
 the version code for each release. For terminal use without the final pause, run
 `uploadlatest.bat --no-pause`.
 
